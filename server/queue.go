@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 var (

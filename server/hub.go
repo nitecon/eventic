@@ -8,7 +8,7 @@ import (
 
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // ClientConn represents a connected client.
