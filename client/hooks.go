@@ -147,7 +147,7 @@ func RunHook(ctx context.Context, repoPath, hook string, event protocol.EventMsg
 
 // RunHookWithOutput executes a hook and returns its combined output.
 func RunHookWithOutput(ctx context.Context, repoPath, hook string, event protocol.EventMsg) (string, error) {
-	log.Info().Str("hook", hook).Str("dir", repoPath).Msg("running hook")
+	log.Info().Str("repo", event.Repo).Str("hook", hook).Str("dir", repoPath).Msg("running hook")
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", hook)
 	cmd.Dir = repoPath

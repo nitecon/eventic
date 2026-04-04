@@ -105,6 +105,39 @@ Once the trigger is configured, every push to your selected branch will automati
 4. Set **Secret** to the same value as `EVENTIC_WEBHOOK_SECRET`
 5. Select the events you want to receive (or choose "Send me everything")
 
+### Bulk Webhook Setup
+
+If you have many repositories, the included `setup-eventic-webhooks.sh` script can add the Eventic webhook to all of them in one pass. It uses the GitHub CLI (`gh`) to iterate over your repos and create the webhook wherever it doesn't already exist.
+
+```bash
+# Preview what would be created (no changes made)
+./setup-eventic-webhooks.sh \
+  --url https://your-server/webhook/github \
+  --secret your-webhook-secret \
+  --dry-run
+
+# Apply to all repos for the authenticated user and their orgs
+./setup-eventic-webhooks.sh \
+  --url https://your-server/webhook/github \
+  --secret your-webhook-secret
+
+# Target specific owners only
+./setup-eventic-webhooks.sh \
+  --url https://your-server/webhook/github \
+  --secret your-webhook-secret \
+  --owner myuser \
+  --owner my-org
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--url` | Yes | Your Eventic server's webhook endpoint |
+| `--secret` | Yes | HMAC secret (must match `EVENTIC_WEBHOOK_SECRET`) |
+| `--owner` | No | GitHub user or org to process (repeatable). When omitted, auto-detects the authenticated user and all their organisations |
+| `--dry-run` | No | Show what would be created without making changes |
+
+> **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) authenticated with admin scope on the target repos, and `jq`.
+
 ---
 
 ## Client
@@ -157,6 +190,8 @@ subscribe:
   - "myworkorg/*"
   - "kubernetes/specific-repo"
 auto-update: true
+auto-check: true
+max-workers: 4
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
   post: "echo done with ${EVENTIC_REPO}"
@@ -170,6 +205,8 @@ global-hooks:
 | `repos_dir` | Directory where repos will be cloned and managed |
 | `subscribe` | List of glob patterns to filter which repositories trigger hooks (see [Subscription Patterns](#subscription-patterns)) |
 | `auto-update` | When `true`, the client checks for new releases every 5 minutes and updates itself automatically |
+| `auto-check` | Verifies repo health every 5 minutes and re-clones broken repos (one at a time). **Defaults to `true`** — set to `false` to disable |
+| `max-workers` | Maximum concurrent event processors (defaults to the number of CPUs). Events for the same repo are always serialized |
 | `global-hooks.pre` | Fallback pre hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 | `global-hooks.post` | Fallback post hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 

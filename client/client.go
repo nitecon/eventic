@@ -3,12 +3,15 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
-	"github.com/coder/websocket"
 )
+
+var repoLocks = NewRepoLocks()
 
 type Config struct {
 	Relay      string   `yaml:"relay"`
@@ -17,6 +20,8 @@ type Config struct {
 	ReposDir   string   `yaml:"repos_dir"`
 	Subscribe  []string `yaml:"subscribe"`
 	AutoUpdate bool     `yaml:"auto-update"`
+	AutoCheck  *bool    `yaml:"auto-check"`
+	MaxWorkers int      `yaml:"max-workers"`
 	GlobalHooks struct {
 		Pre  string `yaml:"pre"`
 		Post string `yaml:"post"`
@@ -25,6 +30,13 @@ type Config struct {
 
 // Run connects to the relay and processes events. Reconnects on failure.
 func Run(ctx context.Context, cfg Config) {
+	workers := cfg.MaxWorkers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	workerSem := make(chan struct{}, workers)
+	log.Info().Int("max_workers", workers).Msg("worker pool configured")
+
 	backoff := time.Second
 
 	for {
@@ -34,7 +46,7 @@ func Run(ctx context.Context, cfg Config) {
 		default:
 		}
 
-		err := connect(ctx, cfg)
+		err := connect(ctx, cfg, workerSem)
 		if err != nil {
 			log.Error().Err(err).Dur("backoff", backoff).Msg("connection lost, reconnecting")
 		}
@@ -52,7 +64,7 @@ func Run(ctx context.Context, cfg Config) {
 	}
 }
 
-func connect(ctx context.Context, cfg Config) error {
+func connect(ctx context.Context, cfg Config, workerSem chan struct{}) error {
 	conn, _, err := websocket.Dial(ctx, cfg.Relay, nil)
 	if err != nil {
 		return err
@@ -112,7 +124,7 @@ func connect(ctx context.Context, cfg Config) error {
 				log.Error().Err(err).Msg("failed to parse event")
 				continue
 			}
-			go processEvent(ctx, conn, cfg, event)
+			go processEvent(ctx, conn, cfg, event, workerSem)
 
 		case "Ping":
 			pong, _ := json.Marshal(protocol.Envelope{MsgType: "Pong"})
@@ -121,7 +133,17 @@ func connect(ctx context.Context, cfg Config) error {
 	}
 }
 
-func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event protocol.EventMsg) {
+func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event protocol.EventMsg, workerSem chan struct{}) {
+	// Acquire worker slot (bounded concurrency)
+	workerSem <- struct{}{}
+	defer func() { <-workerSem }()
+
+	// Acquire per-repo lock — serializes events for the same repo so
+	// concurrent checkouts don't collide, while different repos proceed
+	// in parallel.
+	repoLocks.Lock(event.Repo)
+	defer repoLocks.Unlock(event.Repo)
+
 	log.Info().
 		Str("repo", event.Repo).
 		Str("event", event.GitHubEvent).

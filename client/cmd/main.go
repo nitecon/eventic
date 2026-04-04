@@ -76,5 +76,9 @@ func main() {
 		go client.StartAutoUpdater(ctx)
 	}
 
+	if cfg.AutoCheck == nil || *cfg.AutoCheck {
+		go client.StartRepoChecker(ctx, cfg)
+	}
+
 	client.Run(ctx, cfg)
 }
