@@ -15,7 +15,7 @@ func EnsureRepo(reposDir, repoName, cloneURL string) (string, error) {
 	repoPath := filepath.Join(reposDir, repoName)
 
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
-		log.Info().Str("repo", repoName).Msg("cloning repo")
+		log.Debug().Str("repo", repoName).Msg("cloning repo")
 		if err := os.MkdirAll(filepath.Dir(repoPath), 0755); err != nil {
 			return "", fmt.Errorf("mkdir: %w", err)
 		}
@@ -26,7 +26,7 @@ func EnsureRepo(reposDir, repoName, cloneURL string) (string, error) {
 			return "", fmt.Errorf("git clone: %w", err)
 		}
 	} else {
-		log.Info().Str("repo", repoName).Msg("fetching repo")
+		log.Debug().Str("repo", repoName).Msg("fetching repo")
 		cmd := exec.Command("git", "-C", repoPath, "fetch", "--all", "--prune")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

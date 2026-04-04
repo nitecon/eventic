@@ -22,6 +22,7 @@ type Config struct {
 	AutoUpdate bool     `yaml:"auto-update"`
 	AutoCheck  *bool    `yaml:"auto-check"`
 	MaxWorkers int      `yaml:"max-workers"`
+	LogLevel   string   `yaml:"log-level"`
 	GlobalHooks struct {
 		Pre  string `yaml:"pre"`
 		Post string `yaml:"post"`
@@ -35,7 +36,7 @@ func Run(ctx context.Context, cfg Config) {
 		workers = runtime.NumCPU()
 	}
 	workerSem := make(chan struct{}, workers)
-	log.Info().Int("max_workers", workers).Msg("worker pool configured")
+	log.Debug().Int("max_workers", workers).Msg("worker pool configured")
 
 	backoff := time.Second
 
@@ -144,7 +145,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 	repoLocks.Lock(event.Repo)
 	defer repoLocks.Unlock(event.Repo)
 
-	log.Info().
+	log.Debug().
 		Str("repo", event.Repo).
 		Str("event", event.GitHubEvent).
 		Str("action", event.Action).
@@ -170,28 +171,29 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		// 5. Global post hook (runs for all events)
 
 		if hooks.Pre != "" {
-			if err := RunHook(ctx, repoPath, hooks.Pre, event); err != nil {
-				log.Error().Err(err).Msg("global pre hook failed")
+			if err := RunHook(ctx, repoPath, hooks.Pre, "global:pre", event); err != nil {
+				state = "failure"
+				desc = err.Error()
 			}
 		}
 
 		if hooks.EventPre != "" {
-			if err := RunHook(ctx, repoPath, hooks.EventPre, event); err != nil {
-				log.Error().Err(err).Str("event", event.GitHubEvent).Msg("event pre hook failed")
+			if err := RunHook(ctx, repoPath, hooks.EventPre, "event:pre", event); err != nil {
+				state = "failure"
+				desc = err.Error()
 			}
 		}
 
 		if err := Checkout(repoPath, event); err != nil {
 			state = "failure"
 			desc = err.Error()
-			log.Error().Err(err).Msg("checkout failed")
+			log.Error().Err(err).Msgf("Event %s on %s: checkout failed", event.GitHubEvent, event.Repo)
 		} else {
 			// Event-specific post hook
 			if hooks.EventPost != "" {
-				if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPost, event); err != nil {
+				if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPost, "event:post", event); err != nil {
 					state = "failure"
 					desc = err.Error()
-					log.Error().Err(err).Str("event", event.GitHubEvent).Msg("event post hook failed")
 				} else {
 					desc = out
 				}
@@ -199,8 +201,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 
 			// Global post hook (always runs if checkout succeeded)
 			if hooks.Post != "" {
-				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, event); err != nil {
-					log.Error().Err(err).Msg("global post hook failed")
+				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, "global:post", event); err != nil {
 					if state == "success" {
 						state = "failure"
 						desc = err.Error()
@@ -220,7 +221,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 	})
 	conn.Write(ctx, websocket.MessageText, status)
 
-	log.Info().
+	log.Debug().
 		Str("repo", event.Repo).
 		Str("state", state).
 		Msg("event processed")

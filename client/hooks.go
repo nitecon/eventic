@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
@@ -80,7 +81,7 @@ func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPo
 			hooks.EventPre = eventHooks.Pre
 			hooks.EventPost = eventHooks.Post
 
-			log.Info().
+			log.Debug().
 				Str("config", configPath).
 				Str("event", event.GitHubEvent).
 				Str("action", event.Action).
@@ -94,7 +95,7 @@ func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPo
 	deployPath := filepath.Join(repoPath, ".deploy", "deploy.yml")
 	if _, err := os.Stat(deployPath); err == nil {
 		hooks.Post = fmt.Sprintf("bruce install %s", deployPath)
-		log.Info().Str("manifest", deployPath).Msg("using bruce manifest")
+		log.Debug().Str("manifest", deployPath).Msg("using bruce manifest")
 		return hooks
 	}
 
@@ -102,7 +103,7 @@ func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPo
 	if globalPre != "" || globalPost != "" {
 		hooks.Pre = globalPre
 		hooks.Post = globalPost
-		log.Info().
+		log.Debug().
 			Str("repo", repoPath).
 			Bool("has_pre", globalPre != "").
 			Bool("has_post", globalPost != "").
@@ -140,14 +141,15 @@ func resolveEventHooks(events map[string]EventHooks, eventType, action string) E
 }
 
 // RunHook executes a hook command in the repo directory.
-func RunHook(ctx context.Context, repoPath, hook string, event protocol.EventMsg) error {
-	_, err := RunHookWithOutput(ctx, repoPath, hook, event)
+func RunHook(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) error {
+	_, err := RunHookWithOutput(ctx, repoPath, hook, hookLabel, event)
 	return err
 }
 
 // RunHookWithOutput executes a hook and returns its combined output.
-func RunHookWithOutput(ctx context.Context, repoPath, hook string, event protocol.EventMsg) (string, error) {
-	log.Info().Str("repo", event.Repo).Str("hook", hook).Str("dir", repoPath).Msg("running hook")
+func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) (string, error) {
+	log.Info().Msgf("Event %s on %s: running %s", event.GitHubEvent, event.Repo, hookLabel)
+	log.Debug().Str("hook", hook).Str("dir", repoPath).Msg("hook command detail")
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", hook)
 	cmd.Dir = repoPath
@@ -162,9 +164,15 @@ func RunHookWithOutput(ctx context.Context, repoPath, hook string, event protoco
 	)
 
 	out, err := cmd.CombinedOutput()
+	outStr := strings.TrimSpace(string(out))
 	if err != nil {
-		return string(out), fmt.Errorf("hook failed: %w\noutput: %s", err, out)
+		log.Error().Str("output", outStr).Msgf("Event %s on %s: %s failed", event.GitHubEvent, event.Repo, hookLabel)
+		return outStr, fmt.Errorf("hook failed: %w\noutput: %s", err, out)
 	}
 
-	return string(out), nil
+	if outStr != "" {
+		log.Info().Msgf("Event %s on %s: %s output: %s", event.GitHubEvent, event.Repo, hookLabel, outStr)
+	}
+
+	return outStr, nil
 }

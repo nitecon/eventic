@@ -51,6 +51,17 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to parse config")
 	}
 
+	// Set log level — defaults to info.
+	level := zerolog.InfoLevel
+	if cfg.LogLevel != "" {
+		if parsed, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
+			level = parsed
+		} else {
+			log.Warn().Str("log-level", cfg.LogLevel).Msg("invalid log level, defaulting to info")
+		}
+	}
+	zerolog.SetGlobalLevel(level)
+
 	if cfg.Relay == "" || cfg.Token == "" || cfg.ClientID == "" {
 		log.Fatal().Msg("relay, token, and client_id are required in config")
 	}
