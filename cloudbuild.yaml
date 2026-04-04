@@ -1,0 +1,38 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/eventic:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/eventic:latest'
+      - '-f'
+      - 'Dockerfile'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/eventic:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/eventic:latest'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    args:
+      - 'gcloud'
+      - 'run'
+      - 'deploy'
+      - 'eventic-git'
+      - '--image=gcr.io/$PROJECT_ID/eventic:$COMMIT_SHA'
+      - '--region=us-east4'
+      - '--platform=managed'
+
+images:
+  - 'gcr.io/$PROJECT_ID/eventic:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/eventic:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
