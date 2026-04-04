@@ -1,0 +1,27 @@
+# Binaries
+eventic-server
+eventic-client
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.*
+*.coverprofile
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# CI
+.github/
+
+# Env
+.env

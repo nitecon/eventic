@@ -1,0 +1,262 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: nitecon/eventic
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        run: staticcheck ./...
+
+      - name: Verify build (server)
+        run: CGO_ENABLED=0 go build ./server/cmd/
+
+      - name: Verify build (client)
+        run: CGO_ENABLED=0 go build ./client/cmd/
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Show coverage summary
+        run: go tool cover -func=coverage.txt
+
+  build-and-release:
+    needs: lint-and-test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            VERSION=${TAG_NAME#v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build client binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" \
+            -o eventic-client-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./client/cmd/
+
+      - name: Upload client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eventic-client-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: eventic-client-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  docker:
+    needs: lint-and-test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine Docker tag
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Build and push with version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            VERSION=${{ steps.tag.outputs.tag_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Build and push latest
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+  release:
+    needs: [build-and-release, docker]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Download all client artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: eventic-client-*
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for dir in artifacts/eventic-client-*/; do
+            binary=$(basename "$dir")
+            cp "$dir/$binary" "release/$binary"
+            chmod +x "release/$binary"
+          done
+          ls -la release/
+
+      - name: Generate release notes
+        id: rel
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --prune
+          CURRENT_TAG="${{ steps.tag.outputs.tag_name }}"
+          if PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null); then
+            RANGE="$PREV_TAG..$CURRENT_TAG"
+          else
+            RANGE="$CURRENT_TAG"
+          fi
+
+          cat > RELEASE_BODY.md <<HEREDOC
+          # Release $CURRENT_TAG
+
+          ## Docker Image
+          \`\`\`bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.version }}
+          \`\`\`
+
+          ## Client Binaries
+
+          Download the client binary for your platform:
+
+          | Platform | Binary |
+          |---|---|
+          | Linux (amd64) | \`eventic-client-linux-amd64\` |
+          | Linux (arm64) | \`eventic-client-linux-arm64\` |
+          | macOS (amd64) | \`eventic-client-darwin-amd64\` |
+          | macOS (arm64) | \`eventic-client-darwin-arm64\` |
+
+          ## Installation
+
+          \`\`\`bash
+          curl -L -o /usr/local/bin/eventic-client \\
+            https://github.com/nitecon/eventic/releases/download/${CURRENT_TAG}/eventic-client-linux-amd64
+          chmod +x /usr/local/bin/eventic-client
+          \`\`\`
+
+          ## Changes since ${PREV_TAG:-initial commit}
+          HEREDOC
+
+          git log --no-merges --pretty=format:'- %s (%h) by %an' $RANGE >> RELEASE_BODY.md || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          name: Release ${{ steps.tag.outputs.tag_name }}
+          body_path: RELEASE_BODY.md
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
