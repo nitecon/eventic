@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,20 +18,32 @@ import (
 var version = "dev"
 
 func main() {
+	configPath := flag.String("config", "/etc/eventic/config.yaml", "path to the configuration file")
+	flag.StringVar(configPath, "c", "/etc/eventic/config.yaml", "path to the configuration file (shorthand)")
+	showVersion := flag.Bool("version", false, "print version and exit")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: eventic-client [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Eventic client connects to a relay server and executes\nGitHub webhook-driven actions on local repositories.\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 
 	// Pass build-time version to the client package for auto-update checks.
 	client.Version = version
 
-	configPath := "/etc/eventic/config.yaml"
-	if len(os.Args) > 1 {
-		configPath = os.Args[1]
-	}
-
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(*configPath)
 	if err != nil {
-		log.Fatal().Err(err).Str("path", configPath).Msg("failed to read config")
+		log.Fatal().Err(err).Str("path", *configPath).Msg("failed to read config")
 	}
 
 	var cfg client.Config

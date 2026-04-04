@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,7 +13,29 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// version is set at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: eventic-server [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Eventic server receives GitHub webhooks and relays events\nto connected clients over WebSocket.\n\n")
+		fmt.Fprintf(os.Stderr, "Environment variables:\n")
+		fmt.Fprintf(os.Stderr, "  EVENTIC_WEBHOOK_SECRET   GitHub webhook secret (required)\n")
+		fmt.Fprintf(os.Stderr, "  EVENTIC_CLIENT_TOKENS    Comma-separated client auth tokens (required)\n")
+		fmt.Fprintf(os.Stderr, "  EVENTIC_LISTEN_ADDR      Listen address (default :8080)\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 

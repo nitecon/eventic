@@ -122,7 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/nitecon/eventic/refs/heads/main/ins
 Then edit `/etc/eventic/config.yaml` with your relay URL, token, and subscriptions, and start the service:
 
 ```bash
-sudo systemctl start eventic-client
+sudo systemctl start eventic
 ```
 
 ### Manual Installation
@@ -199,7 +199,7 @@ subscribe:
 
 ### Systemd Service
 
-Create `/etc/systemd/system/eventic-client.service`:
+Create `/etc/systemd/system/eventic.service`:
 
 ```ini
 [Unit]
@@ -209,7 +209,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/eventic-client /etc/eventic/config.yaml
+ExecStart=/usr/local/bin/eventic-client -c /etc/eventic/config.yaml
 Restart=always
 RestartSec=5
 User=eventic
@@ -227,7 +227,7 @@ sudo useradd -r -s /bin/false eventic
 sudo mkdir -p /opt/eventic/{bin,repos} /etc/eventic
 sudo chown -R eventic:eventic /opt/eventic
 sudo systemctl daemon-reload
-sudo systemctl enable --now eventic-client
+sudo systemctl enable --now eventic
 ```
 
 ### Auto-Update

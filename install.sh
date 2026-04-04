@@ -8,8 +8,10 @@ REPOS_DIR="${INSTALL_DIR}/repos"
 CONFIG_DIR="/etc/eventic"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 SYMLINK="/usr/local/bin/eventic-client"
-SERVICE_NAME="eventic-client"
+SERVICE_NAME="eventic"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+OLD_SERVICE_NAME="eventic-client"
+OLD_SERVICE_FILE="/etc/systemd/system/${OLD_SERVICE_NAME}.service"
 
 # --- Helpers ----------------------------------------------------------------
 
@@ -91,6 +93,15 @@ fi
 # --- Systemd service --------------------------------------------------------
 
 if command -v systemctl &>/dev/null; then
+  # Migrate from old eventic-client.service if present
+  if [ -f "$OLD_SERVICE_FILE" ]; then
+    info "Migrating from ${OLD_SERVICE_NAME}.service to ${SERVICE_NAME}.service"
+    systemctl stop "$OLD_SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$OLD_SERVICE_NAME" 2>/dev/null || true
+    rm -f "$OLD_SERVICE_FILE"
+    info "Removed old ${OLD_SERVICE_NAME}.service"
+  fi
+
   cat > "$SERVICE_FILE" <<'EOF'
 [Unit]
 Description=Eventic Client
@@ -99,7 +110,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/eventic-client /etc/eventic/config.yaml
+ExecStart=/usr/local/bin/eventic-client -c /etc/eventic/config.yaml
 Restart=always
 RestartSec=5
 User=eventic
