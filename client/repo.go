@@ -42,6 +42,13 @@ func EnsureRepo(reposDir, repoName, cloneURL string) (string, error) {
 func Checkout(repoPath string, event protocol.EventMsg) error {
 	ref := event.Ref
 
+	// If there's no ref (e.g. workflow_job, workflow_run, check_run events),
+	// skip checkout and stay on the current branch.
+	if ref == "" && event.GitHubEvent != "pull_request" {
+		log.Debug().Str("event", event.GitHubEvent).Msg("no ref provided, skipping checkout")
+		return nil
+	}
+
 	switch event.GitHubEvent {
 	case "pull_request":
 		prRef := fmt.Sprintf("pull/%d/head:pr-%d", event.PRNumber, event.PRNumber)
