@@ -61,6 +61,42 @@ services:
       EVENTIC_CLIENT_TOKENS: "token1,token2"
 ```
 
+### Deploying to Google Cloud Run
+
+The repository includes a `cloudbuild.yaml` that builds the Docker image and deploys it to Cloud Run automatically. To set this up:
+
+1. **Create a GCP project** (or use an existing one) and enable the following APIs:
+   - Cloud Build
+   - Cloud Run
+   - Container Registry (or Artifact Registry)
+
+2. **Create a Cloud Run service** named `eventic-git` (or update the service name in `cloudbuild.yaml`) and configure the environment variables:
+
+   | Variable | Value |
+   |---|---|
+   | `EVENTIC_WEBHOOK_SECRET` | Your GitHub webhook HMAC secret |
+   | `EVENTIC_CLIENT_TOKENS` | Comma-separated client auth tokens |
+
+   You can set these via the Cloud Run console under **Edit & Deploy New Revision > Variables & Secrets**, or with the CLI:
+
+   ```bash
+   gcloud run services update eventic-git \
+     --region=us-east4 \
+     --set-env-vars="EVENTIC_WEBHOOK_SECRET=your-secret,EVENTIC_CLIENT_TOKENS=token1,token2"
+   ```
+
+3. **Set up a Cloud Build trigger** to build and deploy on push:
+   - Go to **Cloud Build > Triggers > Create Trigger**
+   - Connect your GitHub repository
+   - Set the trigger to use the existing `cloudbuild.yaml` at the repo root
+   - Choose the branch pattern to trigger on (e.g., `^main$`)
+
+4. **Enable connectivity** — Cloud Run services are publicly accessible by default, which is required so GitHub can deliver webhooks and clients can connect via WebSocket. Ensure:
+   - The service allows **unauthenticated invocations** (set under the Cloud Run service's **Security** tab)
+   - The Cloud Run service URL is used as your GitHub webhook payload URL (e.g., `https://eventic-git-xxxxx-ue.a.run.app/webhook/github`)
+
+Once the trigger is configured, every push to your selected branch will automatically build and deploy the latest Eventic server to Cloud Run.
+
 ### GitHub Webhook Setup
 
 1. Go to your repository (or organization) **Settings > Webhooks > Add webhook**
