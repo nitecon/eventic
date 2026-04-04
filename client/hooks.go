@@ -62,7 +62,9 @@ type EventicConfig struct {
 
 // DiscoverHooks checks the repo for .eventic.yaml or .deploy/deploy.yml
 // and resolves global + event-specific hooks for the given event.
-func DiscoverHooks(repoPath string, event protocol.EventMsg) HookSet {
+// globalPre and globalPost are fallback hooks from the client config that
+// are used when a repo has no hooks of its own.
+func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPost string) HookSet {
 	var hooks HookSet
 
 	configPath := filepath.Join(repoPath, ".eventic.yaml")
@@ -93,6 +95,18 @@ func DiscoverHooks(repoPath string, event protocol.EventMsg) HookSet {
 	if _, err := os.Stat(deployPath); err == nil {
 		hooks.Post = fmt.Sprintf("bruce install %s", deployPath)
 		log.Info().Str("manifest", deployPath).Msg("using bruce manifest")
+		return hooks
+	}
+
+	// Fallback: client-level global hooks
+	if globalPre != "" || globalPost != "" {
+		hooks.Pre = globalPre
+		hooks.Post = globalPost
+		log.Info().
+			Str("repo", repoPath).
+			Bool("has_pre", globalPre != "").
+			Bool("has_post", globalPost != "").
+			Msg("using client global hooks")
 		return hooks
 	}
 

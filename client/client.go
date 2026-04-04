@@ -11,11 +11,16 @@ import (
 )
 
 type Config struct {
-	Relay     string   `yaml:"relay"`
-	Token     string   `yaml:"token"`
-	ClientID  string   `yaml:"client_id"`
-	ReposDir  string   `yaml:"repos_dir"`
-	Subscribe []string `yaml:"subscribe"`
+	Relay      string   `yaml:"relay"`
+	Token      string   `yaml:"token"`
+	ClientID   string   `yaml:"client_id"`
+	ReposDir   string   `yaml:"repos_dir"`
+	Subscribe  []string `yaml:"subscribe"`
+	AutoUpdate bool     `yaml:"auto-update"`
+	GlobalHooks struct {
+		Pre  string `yaml:"pre"`
+		Post string `yaml:"post"`
+	} `yaml:"global-hooks"`
 }
 
 // Run connects to the relay and processes events. Reconnects on failure.
@@ -133,7 +138,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		desc = err.Error()
 		log.Error().Err(err).Str("repo", event.Repo).Msg("repo sync failed")
 	} else {
-		hooks := DiscoverHooks(repoPath, event)
+		hooks := DiscoverHooks(repoPath, event, cfg.GlobalHooks.Pre, cfg.GlobalHooks.Post)
 
 		// Execution order:
 		// 1. Global pre hook (runs for all events)

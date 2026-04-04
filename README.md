@@ -135,6 +135,10 @@ repos_dir: "/opt/eventic/repos"
 subscribe:
   - "myorg/myrepo"
   - "myorg/infra-*"
+auto-update: true
+global-hooks:
+  pre: "echo preparing ${EVENTIC_REPO}..."
+  post: "echo done with ${EVENTIC_REPO}"
 ```
 
 | Field | Description |
@@ -144,6 +148,9 @@ subscribe:
 | `client_id` | Unique identifier for this client |
 | `repos_dir` | Directory where repos will be cloned and managed |
 | `subscribe` | List of glob patterns to filter which repositories trigger hooks |
+| `auto-update` | When `true`, the client checks for new releases every 5 minutes and updates itself automatically |
+| `global-hooks.pre` | Fallback pre hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
+| `global-hooks.post` | Fallback post hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 
 ### Systemd Service
 
@@ -176,6 +183,12 @@ sudo mkdir -p /opt/eventic/repos /etc/eventic
 sudo systemctl daemon-reload
 sudo systemctl enable --now eventic-client
 ```
+
+### Auto-Update
+
+When `auto-update: true` is set in the client config, the client will check GitHub releases every 5 minutes for a newer version. If one is found, it downloads the matching binary for the current OS and architecture, replaces itself in-place, and exits. The systemd service (configured with `Restart=always`) then restarts automatically with the new binary.
+
+Source builds (without a release version) will update to the latest published release on the first check.
 
 ---
 
@@ -230,9 +243,15 @@ Every hook receives these environment variables:
 | `EVENTIC_PR_NUMBER` | Pull request number (0 if not a PR event) |
 | `EVENTIC_DELIVERY_ID` | Unique GitHub delivery ID for tracing |
 
-### Fallback: Bruce Manifests
+### Hook Resolution Order
 
-If no `.eventic.yaml` is found, the client will look for `.deploy/deploy.yml` and use it as a [Bruce](https://github.com/nitecon/bruce) manifest for push events.
+The client resolves hooks using the following precedence (first match wins):
+
+1. **`.eventic.yaml`** in the repository root — full per-repo hook configuration
+2. **`.deploy/deploy.yml`** in the repository — used as a [Bruce](https://github.com/nitecon/bruce) manifest for push events
+3. **Client-level global hooks** (`global-hooks.pre` / `global-hooks.post` in the client config) — fallback for repos with no hook configuration of their own
+
+This means you can set up default automation for all subscribed repos by adding a `global-hooks:` block to your client config, and individual repos can override it by adding their own `.eventic.yaml`.
 
 ---
 

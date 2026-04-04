@@ -12,9 +12,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// version is set at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
+
+	// Pass build-time version to the client package for auto-update checks.
+	client.Version = version
 
 	configPath := "/etc/eventic/config.yaml"
 	if len(os.Args) > 1 {
@@ -50,6 +56,11 @@ func main() {
 		cancel()
 	}()
 
-	log.Info().Str("relay", cfg.Relay).Str("client_id", cfg.ClientID).Msg("eventic client starting")
+	log.Info().Str("relay", cfg.Relay).Str("client_id", cfg.ClientID).Str("version", version).Msg("eventic client starting")
+
+	if cfg.AutoUpdate {
+		go client.StartAutoUpdater(ctx)
+	}
+
 	client.Run(ctx, cfg)
 }
