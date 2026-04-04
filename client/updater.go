@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -128,5 +129,19 @@ func applyUpdate(ctx context.Context, tag string) error {
 		return fmt.Errorf("download %s returned %d", url, resp.StatusCode)
 	}
 
-	return selfupdate.Apply(resp.Body, selfupdate.Options{})
+	// Resolve symlinks so the update is written to the real binary location
+	// (e.g. /opt/eventic/bin/) rather than the symlink target directory
+	// (e.g. /usr/local/bin/) which may not be writable.
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	realPath, err := filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("resolve symlinks: %w", err)
+	}
+
+	return selfupdate.Apply(resp.Body, selfupdate.Options{
+		TargetPath: realPath,
+	})
 }

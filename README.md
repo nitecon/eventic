@@ -111,16 +111,36 @@ Once the trigger is configured, every push to your selected branch will automati
 
 The client is a small, self-contained binary that runs as a systemd service on any Linux machine. It maintains a persistent WebSocket connection to the server, automatically reconnects with exponential backoff, and executes hooks when events arrive.
 
-### Installation
+### Quick Install
+
+The install script creates the `eventic` user, downloads the binary, installs the systemd service, and drops a template config:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nitecon/eventic/refs/heads/main/install.sh | sudo bash
+```
+
+Then edit `/etc/eventic/config.yaml` with your relay URL, token, and subscriptions, and start the service:
+
+```bash
+sudo systemctl start eventic-client
+```
+
+### Manual Installation
 
 Download the latest release for your platform from the [Releases page](https://github.com/nitecon/eventic/releases):
 
 ```bash
-# Download the binary
-curl -L -o /usr/local/bin/eventic-client \
+# Download to temp, then install into /opt/eventic/bin
+curl -fsSL -o /tmp/eventic-client \
   https://github.com/nitecon/eventic/releases/latest/download/eventic-client-linux-amd64
 
-chmod +x /usr/local/bin/eventic-client
+sudo mkdir -p /opt/eventic/bin
+sudo mv /tmp/eventic-client /opt/eventic/bin/eventic-client
+sudo chmod +x /opt/eventic/bin/eventic-client
+sudo chown eventic:eventic /opt/eventic/bin/eventic-client
+
+# Symlink into PATH for convenience
+sudo ln -sf /opt/eventic/bin/eventic-client /usr/local/bin/eventic-client
 ```
 
 ### Configuration
@@ -204,14 +224,17 @@ Enable and start:
 
 ```bash
 sudo useradd -r -s /bin/false eventic
-sudo mkdir -p /opt/eventic/repos /etc/eventic
+sudo mkdir -p /opt/eventic/{bin,repos} /etc/eventic
+sudo chown -R eventic:eventic /opt/eventic
 sudo systemctl daemon-reload
 sudo systemctl enable --now eventic-client
 ```
 
 ### Auto-Update
 
-When `auto-update: true` is set in the client config, the client will check GitHub releases every 5 minutes for a newer version. If one is found, it downloads the matching binary for the current OS and architecture, replaces itself in-place, and exits. The systemd service (configured with `Restart=always`) then restarts automatically with the new binary.
+When `auto-update: true` is set in the client config, the client will check GitHub releases every 5 minutes for a newer version. If one is found, it downloads the matching binary for the current OS and architecture, resolves any symlinks to find the real binary location (e.g. `/opt/eventic/bin/eventic-client`), replaces itself, and exits. The systemd service (configured with `Restart=always`) then restarts automatically with the new binary.
+
+Because the binary lives in `/opt/eventic/bin/` (owned by the `eventic` user), the auto-updater can write updates without requiring root privileges. The symlink in `/usr/local/bin/` continues to point to the updated binary automatically.
 
 Source builds (without a release version) will update to the latest published release on the first check.
 
