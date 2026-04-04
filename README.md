@@ -133,8 +133,9 @@ token: "your-auth-token"
 client_id: "build-server-01"
 repos_dir: "/opt/eventic/repos"
 subscribe:
-  - "myorg/myrepo"
-  - "myorg/infra-*"
+  - "myuser/*"
+  - "myworkorg/*"
+  - "kubernetes/specific-repo"
 auto-update: true
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
@@ -147,10 +148,34 @@ global-hooks:
 | `token` | Authentication token (must be listed in the server's `EVENTIC_CLIENT_TOKENS`) |
 | `client_id` | Unique identifier for this client |
 | `repos_dir` | Directory where repos will be cloned and managed |
-| `subscribe` | List of glob patterns to filter which repositories trigger hooks |
+| `subscribe` | List of glob patterns to filter which repositories trigger hooks (see [Subscription Patterns](#subscription-patterns)) |
 | `auto-update` | When `true`, the client checks for new releases every 5 minutes and updates itself automatically |
 | `global-hooks.pre` | Fallback pre hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 | `global-hooks.post` | Fallback post hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
+
+### Subscription Patterns
+
+Subscriptions use Go's `path.Match` glob syntax to filter which repositories trigger hooks on the client. Repositories arrive as `org/repo`, so patterns must account for the `/` separator — a bare `*` will **not** match across it.
+
+| Pattern | Matches | Use case |
+|---|---|---|
+| `myuser/*` | All repos under `myuser` | Subscribe to everything in your personal account |
+| `myworkorg/*` | All repos under `myworkorg` | Subscribe to everything in your work organization |
+| `kubernetes/kops` | Exactly `kubernetes/kops` | Subscribe to a specific repo you contribute to |
+| `myorg/infra-*` | `myorg/infra-web`, `myorg/infra-db`, etc. | Subscribe to repos matching a naming convention |
+| `*/*` | Every org and every repo | Subscribe to absolutely everything (see note below) |
+
+A typical setup combines broad org-level wildcards for accounts you own with pinpoint subscriptions for external repos you contribute to:
+
+```yaml
+subscribe:
+  - "myuser/*"            # all personal repos
+  - "myworkorg/*"         # all work org repos
+  - "kubernetes/kops"     # specific external repo I contribute to
+  - "prometheus/node_*"   # external repos matching a prefix
+```
+
+> **Note:** `*/*` subscribes to every event the server receives. This only makes sense if your server's webhook is scoped to repos you care about. The only requirement for any pattern to work is that the corresponding GitHub webhook has been added to the repository or organization — Eventic can only relay events it actually receives.
 
 ### Systemd Service
 
