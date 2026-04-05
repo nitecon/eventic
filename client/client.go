@@ -180,7 +180,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				desc = err.Error()
 			}
 		} else if hooks.Pre != "" {
-			log.Debug().Str("event", event.GitHubEvent).Str("action", event.Action).Msg("skipping global pre hook (filtered)")
+			log.Debug().Str("event", eventLabel(event)).Msg("skipping global pre hook (filtered)")
 		}
 
 		if hooks.EventPre != "" {
@@ -193,7 +193,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		if err := Checkout(repoPath, event); err != nil {
 			state = "failure"
 			desc = err.Error()
-			log.Error().Err(err).Msgf("Event %s on %s: checkout failed", event.GitHubEvent, event.Repo)
+			log.Error().Err(err).Msgf("Event %s on %s: checkout failed", eventLabel(event), event.Repo)
 		} else {
 			// Event-specific post hook
 			if hooks.EventPost != "" {
@@ -216,7 +216,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 					desc = out
 				}
 			} else if hooks.Post != "" {
-				log.Debug().Str("event", event.GitHubEvent).Str("action", event.Action).Msg("skipping global post hook (filtered)")
+				log.Debug().Str("event", eventLabel(event)).Msg("skipping global post hook (filtered)")
 			}
 		}
 	}

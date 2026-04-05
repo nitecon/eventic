@@ -193,6 +193,14 @@ func shouldRunGlobalHook(eventType, action string, allowedPatterns, ignorePatter
 	return !shouldIgnoreGlobalHook(eventType, action, ignorePatterns)
 }
 
+// eventLabel returns "event.action" when an action is present, otherwise just "event".
+func eventLabel(event protocol.EventMsg) string {
+	if event.Action != "" {
+		return event.GitHubEvent + "." + event.Action
+	}
+	return event.GitHubEvent
+}
+
 // RunHook executes a hook command in the repo directory.
 func RunHook(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) error {
 	_, err := RunHookWithOutput(ctx, repoPath, hook, hookLabel, event)
@@ -201,7 +209,7 @@ func RunHook(ctx context.Context, repoPath, hook, hookLabel string, event protoc
 
 // RunHookWithOutput executes a hook and returns its combined output.
 func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) (string, error) {
-	log.Info().Msgf("Event %s on %s: running %s", event.GitHubEvent, event.Repo, hookLabel)
+	log.Info().Msgf("Event %s on %s: running %s", eventLabel(event), event.Repo, hookLabel)
 	log.Debug().Str("hook", hook).Str("dir", repoPath).Msg("hook command detail")
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", hook)
@@ -219,12 +227,12 @@ func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, ev
 	out, err := cmd.CombinedOutput()
 	outStr := strings.TrimSpace(string(out))
 	if err != nil {
-		log.Error().Str("output", outStr).Msgf("Event %s on %s: %s failed", event.GitHubEvent, event.Repo, hookLabel)
+		log.Error().Str("output", outStr).Msgf("Event %s on %s: %s failed", eventLabel(event), event.Repo, hookLabel)
 		return outStr, fmt.Errorf("hook failed: %w\noutput: %s", err, out)
 	}
 
 	if outStr != "" {
-		log.Info().Msgf("Event %s on %s: %s output: %s", event.GitHubEvent, event.Repo, hookLabel, outStr)
+		log.Info().Msgf("Event %s on %s: %s output: %s", eventLabel(event), event.Repo, hookLabel, outStr)
 	}
 
 	return outStr, nil
