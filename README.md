@@ -195,6 +195,12 @@ max-workers: 4
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
   post: "echo done with ${EVENTIC_REPO}"
+global-ignore-pre:
+  - check_run.completed
+  - workflow_run.*
+  - deployment_status
+global-ignore-post:
+  - check_run
 ```
 
 | Field | Description |
@@ -209,6 +215,8 @@ global-hooks:
 | `max-workers` | Maximum concurrent event processors (defaults to the number of CPUs). Events for the same repo are always serialized |
 | `global-hooks.pre` | Fallback pre hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 | `global-hooks.post` | Fallback post hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
+| `global-ignore-pre` | List of event patterns to skip global pre hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
+| `global-ignore-post` | List of event patterns to skip global post hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
 
 ### Subscription Patterns
 
@@ -233,6 +241,31 @@ subscribe:
 ```
 
 > **Note:** `*/*` subscribes to every event the server receives. This only makes sense if your server's webhook is scoped to repos you care about. The only requirement for any pattern to work is that the corresponding GitHub webhook has been added to the repository or organization — Eventic can only relay events it actually receives.
+
+### Global Ignore Patterns
+
+The `global-ignore-pre` and `global-ignore-post` lists let you skip global hook execution for specific event types. This is useful for filtering out noisy events (like `check_run` or `workflow_run`) that would otherwise trigger your global hooks unnecessarily.
+
+**These only affect global hooks** — event-specific hooks defined in `.eventic.yaml` are never skipped by ignore patterns.
+
+| Pattern | Matches | Example |
+|---|---|---|
+| `check_run.completed` | Exact event type and action | Only `check_run` events with action `completed` |
+| `check_run.*` | Any action for the event type | All `check_run` events regardless of action |
+| `check_run` | All actions (same as `check_run.*`) | All `check_run` events regardless of action |
+| `*.completed` | Any event with a specific action | Any event type where the action is `completed` |
+| `*` | Everything | All events |
+
+```yaml
+global-ignore-pre:
+  - check_run.completed      # skip pre hook for completed check runs
+  - workflow_run.*            # skip pre hook for all workflow_run events
+  - deployment_status         # skip pre hook for all deployment_status events
+global-ignore-post:
+  - check_run                 # skip post hook for all check_run events
+```
+
+> **Tip:** For a full list of GitHub webhook event types and their actions, see `client/github_events.go` in the source or the [GitHub webhook documentation](https://docs.github.com/en/webhooks/webhook-events-and-payloads).
 
 ### Systemd Service
 

@@ -140,6 +140,43 @@ func resolveEventHooks(events map[string]EventHooks, eventType, action string) E
 	return EventHooks{}
 }
 
+// matchesIgnorePattern checks whether a GitHub event (type + action) matches
+// a single ignore pattern. Supported patterns:
+//
+//	"check_run.completed"  — exact event type and action
+//	"check_run.*"          — any action under check_run
+//	"check_run"            — equivalent to "check_run.*" (all actions)
+//	"*" or "*.*"           — matches everything
+func matchesIgnorePattern(eventType, action, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+
+	parts := strings.SplitN(pattern, ".", 2)
+	patEvent := parts[0]
+
+	// No dot in pattern — match event type only (all actions).
+	if len(parts) == 1 {
+		return patEvent == "*" || eventType == patEvent
+	}
+
+	patAction := parts[1]
+	eventMatch := patEvent == "*" || eventType == patEvent
+	actionMatch := patAction == "*" || action == patAction
+	return eventMatch && actionMatch
+}
+
+// shouldIgnoreGlobalHook returns true if the event matches any pattern in the
+// ignore list, meaning the corresponding global hook should be skipped.
+func shouldIgnoreGlobalHook(eventType, action string, patterns []string) bool {
+	for _, p := range patterns {
+		if matchesIgnorePattern(eventType, action, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // RunHook executes a hook command in the repo directory.
 func RunHook(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) error {
 	_, err := RunHookWithOutput(ctx, repoPath, hook, hookLabel, event)
