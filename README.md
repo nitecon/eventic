@@ -260,14 +260,18 @@ The `global-ignore-pre` and `global-ignore-post` lists let you skip global hook 
 | `check_run.completed` | Exact event type and action | Only `check_run` events with action `completed` |
 | `check_run.*` | Any action for the event type | All `check_run` events regardless of action |
 | `check_run` | All actions (same as `check_run.*`) | All `check_run` events regardless of action |
-| `*.completed` | Any event with a specific action | Any event type where the action is `completed` |
-| `*` | Everything | All events |
+| `"*.completed"` | Any event with a specific action | Any event type where the action is `completed` |
+| `"*"` | Everything | All events |
+
+> **YAML quoting:** Patterns that start with `*` must be quoted (`"*"`, `"*.completed"`, `"*.*"`) because YAML treats a bare `*` as an anchor alias. Patterns where `*` appears after other characters (like `check_run.*`) do not need quoting.
 
 ```yaml
 global-ignore-pre:
   - check_run.completed      # skip pre hook for completed check runs
   - workflow_run.*            # skip pre hook for all workflow_run events
   - deployment_status         # skip pre hook for all deployment_status events
+  - "*.completed"             # skip pre hook for any event with action completed
+  - "*"                       # skip pre hook for everything (must be quoted)
 global-ignore-post:
   - check_run                 # skip post hook for all check_run events
 ```
@@ -282,7 +286,7 @@ This is the inverse of the ignore lists: instead of "run for everything except t
 
 **These only affect global hooks** — event-specific hooks defined in `.eventic.yaml` are never filtered by allowed patterns.
 
-The pattern syntax is identical to [Global Ignore Patterns](#global-ignore-patterns):
+The pattern syntax is identical to [Global Ignore Patterns](#global-ignore-patterns) (remember to quote patterns starting with `*`):
 
 ```yaml
 # Only run global hooks for workflow_job.completed — ignore everything else
@@ -291,6 +295,7 @@ global-allowed-pre:
 global-allowed-post:
   - workflow_job.completed
   - push                       # also run post hook on push events
+  - "*.created"                # also run post hook for any event with action created
 ```
 
 > **Precedence:** When `global-allowed-pre` (or `-post`) is non-empty, the corresponding `global-ignore-pre` (or `-post`) list is ignored entirely. If the allowed list is empty (or omitted), the ignore list applies as usual.
