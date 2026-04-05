@@ -183,29 +183,26 @@ Create `/etc/eventic/config.yaml`:
 ```yaml
 relay: "wss://your-server:8080/ws"
 token: "your-auth-token"
-client_id: "build-server-01"
+client_id: "your-client-id"
 repos_dir: "/opt/eventic/repos"
+auto-update: true
+global-ignore-pre:
+  - "*"
+global-ignore-post:
+  - workflow_job.in_progress
+  - workflow_job.queued
+  - workflow_run.requested
+  - workflow_run.in_progress
+  - check_run.*
+  - release.edited
+  - release.published
+global-hooks:
+  pre: "echo preparing ${EVENTIC_REPO}..."
+  post: "claude -p 'Validate the repository at ${EVENTIC_REPOS}/${EVENTIC_REPO} and report any issues.'"
 subscribe:
   - "myuser/*"
   - "myworkorg/*"
   - "kubernetes/specific-repo"
-auto-update: true
-auto-check: true
-max-workers: 4
-global-hooks:
-  pre: "echo preparing ${EVENTIC_REPO}..."
-  post: "echo done with ${EVENTIC_REPO}"
-global-ignore-pre:
-  - check_run.completed
-  - workflow_run.*
-  - deployment_status
-global-ignore-post:
-  - check_run
-global-allowed-pre:
-  - workflow_job.completed
-global-allowed-post:
-  - workflow_job.completed
-  - push
 ```
 
 | Field | Description |
