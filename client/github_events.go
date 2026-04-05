@@ -2,8 +2,9 @@ package client
 
 // GitHubWebhookEvents maps each GitHub webhook event type to its known action
 // values. Events with an empty slice have no action field. This reference is
-// provided for users configuring global-ignore-pre / global-ignore-post
-// patterns; it is NOT used for runtime validation since GitHub may add new
+// provided for users configuring global-ignore-pre / global-ignore-post and
+// global-allowed-pre / global-allowed-post patterns; it is NOT used for runtime
+// validation since GitHub may add new
 // events or actions at any time.
 //
 // Source: https://docs.github.com/en/webhooks/webhook-events-and-payloads

@@ -51,6 +51,56 @@ func TestMatchesIgnorePattern(t *testing.T) {
 	}
 }
 
+func TestShouldRunGlobalHook(t *testing.T) {
+	tests := []struct {
+		name           string
+		eventType      string
+		action         string
+		allowedPatterns []string
+		ignorePatterns []string
+		want           bool
+	}{
+		// Allowed list empty — falls back to ignore logic
+		{"no allowed, no ignore", "push", "", nil, nil, true},
+		{"no allowed, ignore matches", "check_run", "completed", nil, []string{"check_run.completed"}, false},
+		{"no allowed, ignore no match", "push", "", nil, []string{"check_run.completed"}, true},
+
+		// Allowed list non-empty — ignore list is disregarded
+		{"allowed exact match", "workflow_job", "completed", []string{"workflow_job.completed"}, nil, true},
+		{"allowed no match", "push", "", []string{"workflow_job.completed"}, nil, false},
+		{"allowed wildcard action", "workflow_job", "completed", []string{"workflow_job.*"}, nil, true},
+		{"allowed wildcard event", "workflow_job", "completed", []string{"*.completed"}, nil, true},
+		{"allowed bare event", "push", "", []string{"push"}, nil, true},
+		{"allowed star matches all", "check_run", "created", []string{"*"}, nil, true},
+
+		// Allowed overrides ignore
+		{"allowed overrides ignore", "workflow_job", "completed",
+			[]string{"workflow_job.completed"},
+			[]string{"workflow_job.completed"}, // would be ignored, but allowed takes precedence
+			true},
+		{"allowed blocks what ignore would allow", "push", "",
+			[]string{"workflow_job.completed"},
+			[]string{}, // ignore list is empty so push would normally run
+			false},
+
+		// Multiple allowed patterns
+		{"multiple allowed, second matches", "push", "",
+			[]string{"workflow_job.completed", "push"}, nil, true},
+		{"multiple allowed, none match", "check_run", "created",
+			[]string{"workflow_job.completed", "push"}, nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldRunGlobalHook(tt.eventType, tt.action, tt.allowedPatterns, tt.ignorePatterns)
+			if got != tt.want {
+				t.Errorf("shouldRunGlobalHook(%q, %q, %v, %v) = %v, want %v",
+					tt.eventType, tt.action, tt.allowedPatterns, tt.ignorePatterns, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldIgnoreGlobalHook(t *testing.T) {
 	tests := []struct {
 		name      string

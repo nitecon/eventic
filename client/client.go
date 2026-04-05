@@ -27,8 +27,10 @@ type Config struct {
 		Pre  string `yaml:"pre"`
 		Post string `yaml:"post"`
 	} `yaml:"global-hooks"`
-	GlobalIgnorePre  []string `yaml:"global-ignore-pre"`
-	GlobalIgnorePost []string `yaml:"global-ignore-post"`
+	GlobalIgnorePre   []string `yaml:"global-ignore-pre"`
+	GlobalIgnorePost  []string `yaml:"global-ignore-post"`
+	GlobalAllowedPre  []string `yaml:"global-allowed-pre"`
+	GlobalAllowedPost []string `yaml:"global-allowed-post"`
 }
 
 // Run connects to the relay and processes events. Reconnects on failure.
@@ -172,13 +174,13 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		// 4. Event-specific post hook
 		// 5. Global post hook (runs for all events)
 
-		if hooks.Pre != "" && !shouldIgnoreGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalIgnorePre) {
+		if hooks.Pre != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPre, cfg.GlobalIgnorePre) {
 			if err := RunHook(ctx, repoPath, hooks.Pre, "global:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
 			}
 		} else if hooks.Pre != "" {
-			log.Debug().Str("event", event.GitHubEvent).Str("action", event.Action).Msg("skipping global pre hook (ignored)")
+			log.Debug().Str("event", event.GitHubEvent).Str("action", event.Action).Msg("skipping global pre hook (filtered)")
 		}
 
 		if hooks.EventPre != "" {
@@ -204,7 +206,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			}
 
 			// Global post hook (runs if checkout succeeded and not ignored)
-			if hooks.Post != "" && !shouldIgnoreGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalIgnorePost) {
+			if hooks.Post != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPost, cfg.GlobalIgnorePost) {
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, "global:post", event); err != nil {
 					if state == "success" {
 						state = "failure"
@@ -214,7 +216,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 					desc = out
 				}
 			} else if hooks.Post != "" {
-				log.Debug().Str("event", event.GitHubEvent).Str("action", event.Action).Msg("skipping global post hook (ignored)")
+				log.Debug().Str("event", event.GitHubEvent).Str("action", event.Action).Msg("skipping global post hook (filtered)")
 			}
 		}
 	}

@@ -177,6 +177,22 @@ func shouldIgnoreGlobalHook(eventType, action string, patterns []string) bool {
 	return false
 }
 
+// shouldRunGlobalHook decides whether a global hook should execute.
+// If allowedPatterns is non-empty it acts as an allowlist — only events matching
+// at least one allowed pattern will run (ignore patterns are disregarded).
+// Otherwise the existing ignore-list logic applies.
+func shouldRunGlobalHook(eventType, action string, allowedPatterns, ignorePatterns []string) bool {
+	if len(allowedPatterns) > 0 {
+		for _, p := range allowedPatterns {
+			if matchesIgnorePattern(eventType, action, p) {
+				return true
+			}
+		}
+		return false
+	}
+	return !shouldIgnoreGlobalHook(eventType, action, ignorePatterns)
+}
+
 // RunHook executes a hook command in the repo directory.
 func RunHook(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) error {
 	_, err := RunHookWithOutput(ctx, repoPath, hook, hookLabel, event)

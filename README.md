@@ -201,6 +201,11 @@ global-ignore-pre:
   - deployment_status
 global-ignore-post:
   - check_run
+global-allowed-pre:
+  - workflow_job.completed
+global-allowed-post:
+  - workflow_job.completed
+  - push
 ```
 
 | Field | Description |
@@ -217,6 +222,8 @@ global-ignore-post:
 | `global-hooks.post` | Fallback post hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 | `global-ignore-pre` | List of event patterns to skip global pre hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
 | `global-ignore-post` | List of event patterns to skip global post hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
+| `global-allowed-pre` | Allowlist of event patterns for global pre hook — when non-empty, **only** matching events run the hook and ignore patterns are disregarded (see [Global Allowed Patterns](#global-allowed-patterns)) |
+| `global-allowed-post` | Allowlist of event patterns for global post hook — same behaviour as `global-allowed-pre` but for the post hook |
 
 ### Subscription Patterns
 
@@ -266,6 +273,27 @@ global-ignore-post:
 ```
 
 > **Tip:** For a full list of GitHub webhook event types and their actions, see `client/github_events.go` in the source or the [GitHub webhook documentation](https://docs.github.com/en/webhooks/webhook-events-and-payloads).
+
+### Global Allowed Patterns
+
+The `global-allowed-pre` and `global-allowed-post` lists act as an **allowlist** for global hooks. When a list has one or more entries, **only** events matching at least one pattern will trigger the corresponding global hook — everything else is silently skipped and the ignore list is completely disregarded.
+
+This is the inverse of the ignore lists: instead of "run for everything except these", it's "run for **only** these". Use it when you want a single event (or a small set) to be the only trigger for your global hooks.
+
+**These only affect global hooks** — event-specific hooks defined in `.eventic.yaml` are never filtered by allowed patterns.
+
+The pattern syntax is identical to [Global Ignore Patterns](#global-ignore-patterns):
+
+```yaml
+# Only run global hooks for workflow_job.completed — ignore everything else
+global-allowed-pre:
+  - workflow_job.completed
+global-allowed-post:
+  - workflow_job.completed
+  - push                       # also run post hook on push events
+```
+
+> **Precedence:** When `global-allowed-pre` (or `-post`) is non-empty, the corresponding `global-ignore-pre` (or `-post`) list is ignored entirely. If the allowed list is empty (or omitted), the ignore list applies as usual.
 
 ### Systemd Service
 
