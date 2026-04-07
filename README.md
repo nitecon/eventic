@@ -196,6 +196,8 @@ global-ignore-post:
   - check_run.*
   - release.edited
   - release.published
+default-notify: "Hook {{.State}} for {{.Repo}} ({{.Event}}.{{.Action}})"
+default-notify-on: [failure]
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
   post: "claude -p 'Validate the repository at ${EVENTIC_REPOS}/${EVENTIC_REPO} and report any issues.'"
@@ -233,6 +235,8 @@ subscribe:
 | `global-ignore-post` | List of event patterns to skip global post hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
 | `global-allowed-pre` | Allowlist of event patterns for global pre hook — when non-empty, **only** matching events run the hook and ignore patterns are disregarded (see [Global Allowed Patterns](#global-allowed-patterns)) |
 | `global-allowed-post` | Allowlist of event patterns for global post hook — same behaviour as `global-allowed-pre` but for the post hook |
+| `default-notify` | Default notification template used as a fallback when global hooks have no `notify` field set (see [Notifications](#notifications)) |
+| `default-notify-on` | Default `notify_on` filter applied alongside `default-notify` (e.g., `[failure]`). Only used when `default-notify` is set |
 
 ### Subscription Patterns
 
@@ -575,6 +579,12 @@ events:
     post: "/opt/scripts/release.sh"
     notify: "Release {{.PayloadField \"release.tag_name\"}} published for {{.Repo}}"
 ```
+
+### Start Notifications
+
+Eventic automatically sends a **start notification** with state `pending` before each hook begins execution. These appear as blue-colored messages in Discord and Slack, giving real-time visibility into hook progress. Start notifications are sent for every hook phase (`global:pre`, `event:pre`, `event:post`, `global:post`) as it begins.
+
+> **Note:** Notifications (both start and completion) are only sent when at least one hook actually executes. If no hooks match an event, no notifications are dispatched — even if a `notify` template is configured. This prevents noise from events that have no automation attached.
 
 ### Notification Filtering
 
