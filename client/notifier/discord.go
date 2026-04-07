@@ -33,9 +33,9 @@ func init() {
 		}
 		categoryID, _ := cfg["category_id"].(string)
 		channelID, _ := cfg["channel_id"].(string)
-		notifyChannel, _ := cfg["notify_channel"].(string)
-		if nc := os.Getenv("DISCORD_NOTIFY_CHANNEL"); nc != "" {
-			notifyChannel = nc
+		notifyChannelID, _ := cfg["notify_channel_id"].(string)
+		if nc := os.Getenv("DISCORD_NOTIFY_CHANNEL_ID"); nc != "" {
+			notifyChannelID = nc
 		}
 
 		if token == "" {
@@ -55,7 +55,7 @@ func init() {
 			GuildID:       guildID,
 			CategoryID:    categoryID,
 			ChannelID:     channelID,
-			NotifyChannel: notifyChannel,
+			NotifyChannelID: notifyChannelID,
 			channelCache:  &sync.Map{},
 		}, nil
 	})
@@ -124,7 +124,7 @@ type DiscordBotNotifier struct {
 	GuildID       string
 	CategoryID    string
 	ChannelID     string
-	NotifyChannel string // channel name to route all notifications to (looked up by name, not auto-created)
+	NotifyChannelID string // dedicated channel ID to route all notifications to
 	channelCache  *sync.Map // slug -> channelID
 }
 
@@ -136,6 +136,18 @@ func (n *DiscordBotNotifier) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discord bot ping: %w", err)
 	}
+
+	if n.NotifyChannelID != "" {
+		_, err := n.session.ChannelMessageSendEmbed(n.NotifyChannelID, &discordgo.MessageEmbed{
+			Title:       "Eventic Started",
+			Description: "Eventic client is online and connected.",
+			Color:       0x00ff00,
+		})
+		if err != nil {
+			return fmt.Errorf("discord bot ping: failed to send startup message to notify_channel_id: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -179,31 +191,16 @@ func (n *DiscordBotNotifier) Notify(ctx context.Context, notification Notificati
 }
 
 // resolveChannel returns the Discord channel ID for a repo, using cache.
-// Priority: ChannelID (static ID) > NotifyChannel (name lookup) > per-repo auto-create.
+// Priority: ChannelID (static ID) > NotifyChannelID (dedicated channel) > per-repo auto-create.
 func (n *DiscordBotNotifier) resolveChannel(repo string) (string, error) {
 	// Static channel ID takes priority.
 	if n.ChannelID != "" {
 		return n.ChannelID, nil
 	}
 
-	// notify_channel: route all notifications to a named channel.
-	// The channel must already exist — we look it up by name, never create it.
-	if n.NotifyChannel != "" {
-		cacheKey := "notify_channel:" + n.NotifyChannel
-		if cached, ok := n.channelCache.Load(cacheKey); ok {
-			return cached.(string), nil
-		}
-		channels, err := n.session.GuildChannels(n.GuildID)
-		if err != nil {
-			return "", fmt.Errorf("discord: error fetching guild channels for notify_channel: %w", err)
-		}
-		for _, ch := range channels {
-			if ch.Name == n.NotifyChannel {
-				n.channelCache.Store(cacheKey, ch.ID)
-				return ch.ID, nil
-			}
-		}
-		return "", fmt.Errorf("discord: notify_channel %q not found in guild (channel must already exist)", n.NotifyChannel)
+	// Dedicated channel: route all notifications to a single channel by ID.
+	if n.NotifyChannelID != "" {
+		return n.NotifyChannelID, nil
 	}
 
 	slug := repoSlug(repo)
