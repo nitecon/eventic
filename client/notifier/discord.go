@@ -90,15 +90,35 @@ func (n *DiscordWebhookNotifier) Ping(ctx context.Context) error {
 func (n *DiscordWebhookNotifier) Notify(ctx context.Context, notification Notification) error {
 	message := ResolveTemplate(notification.Message, notification)
 
-	content := fmt.Sprintf("**[%s]** %s\n**Repo:** %s\n**Event:** %s.%s\n**Sender:** %s",
-		notification.HookName, message, notification.Repo, notification.Event, notification.Action, notification.Sender)
-
-	if notification.Stdout != "" {
-		content += fmt.Sprintf("\n\n**Output:**\n```\n%s\n```", notification.Stdout)
+	color := 0x00ff00 // green: success
+	switch notification.State {
+	case "failure":
+		color = 0xff0000 // red
+	case "pending":
+		color = 0x3498db // blue
 	}
 
-	body, _ := json.Marshal(map[string]string{
-		"content": content,
+	embed := map[string]interface{}{
+		"title":       fmt.Sprintf("[%s] %s", notification.HookName, message),
+		"description": fmt.Sprintf("**Repo:** %s\n**Event:** %s.%s\n**Sender:** %s", notification.Repo, notification.Event, notification.Action, notification.Sender),
+		"color":       color,
+	}
+
+	if notification.Stdout != "" {
+		stdout := notification.Stdout
+		if len(stdout) > 1000 {
+			stdout = stdout[:1000] + "..."
+		}
+		embed["fields"] = []map[string]interface{}{
+			{
+				"name":  "Output",
+				"value": fmt.Sprintf("```\n%s\n```", stdout),
+			},
+		}
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"embeds": []map[string]interface{}{embed},
 	})
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", n.WebhookURL, bytes.NewBuffer(body))
@@ -159,9 +179,12 @@ func (n *DiscordBotNotifier) Notify(ctx context.Context, notification Notificati
 
 	message := ResolveTemplate(notification.Message, notification)
 
-	color := 0x00ff00
-	if notification.State == "failure" {
-		color = 0xff0000
+	color := 0x00ff00 // green: success
+	switch notification.State {
+	case "failure":
+		color = 0xff0000 // red
+	case "pending":
+		color = 0x3498db // blue
 	}
 
 	embed := &discordgo.MessageEmbed{

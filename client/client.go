@@ -35,6 +35,8 @@ type Config struct {
 	GlobalIgnorePost   []string        `yaml:"global-ignore-post"`
 	GlobalAllowedPre   []string        `yaml:"global-allowed-pre"`
 	GlobalAllowedPost  []string        `yaml:"global-allowed-post"`
+	DefaultNotify      string          `yaml:"default-notify"`
+	DefaultNotifyOn    []string        `yaml:"default-notify-on"`
 	Notifier           notifier.Config `yaml:"notifier"`
 	RequireApproval    bool            `yaml:"require_approval"`
 	ApprovalsPath      string          `yaml:"approvals_path"`
@@ -244,6 +246,14 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 	} else {
 		hooks := DiscoverHooks(repoPath, event, cfg.GlobalHooks.Pre, cfg.GlobalHooks.Post, cfg.GlobalHooks.Notify, cfg.GlobalHooks.NotifyOn)
 
+		// Apply default notification template as fallback for global notify.
+		if hooks.Notify == "" && cfg.DefaultNotify != "" {
+			hooks.Notify = cfg.DefaultNotify
+			if len(hooks.NotifyOn) == 0 {
+				hooks.NotifyOn = cfg.DefaultNotifyOn
+			}
+		}
+
 		// Execution order:
 		// 1. Global pre hook
 		// 2. Event-specific pre hook
@@ -253,8 +263,12 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		// 6. Global post hook
 		// 7. Global notify (final summary, filtered by notify_on)
 
+		hooksExecuted := false
 		var lastOut string
+
 		if hooks.Pre != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPre, cfg.GlobalIgnorePre) {
+			sendStartNotification(ctx, dispatch, "global:pre", event)
+			hooksExecuted = true
 			if out, err := RunHookWithOutput(ctx, repoPath, hooks.Pre, "global:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
@@ -267,6 +281,8 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		}
 
 		if hooks.EventPre != "" {
+			sendStartNotification(ctx, dispatch, "event:pre", event)
+			hooksExecuted = true
 			if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPre, "event:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
@@ -285,6 +301,8 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			eventPostState := "success"
 			var eventPostOut string
 			if hooks.EventPost != "" {
+				sendStartNotification(ctx, dispatch, "event:post", event)
+				hooksExecuted = true
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPost, "event:post", event); err != nil {
 					state = "failure"
 					desc = err.Error()
@@ -296,13 +314,15 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				}
 			}
 
-			// Event-specific notify (filtered by notify_on)
-			if hooks.EventNotify != "" && ShouldNotify(hooks.EventNotifyOn, eventPostState) {
+			// Event-specific notify (filtered by notify_on, only if hooks ran)
+			if hooksExecuted && hooks.EventNotify != "" && ShouldNotify(hooks.EventNotifyOn, eventPostState) {
 				sendNotification(ctx, dispatch, "event:post", hooks.EventNotify, eventPostOut, eventPostState, hooks.EventNotifyOn, event)
 			}
 
 			// Global post hook
 			if hooks.Post != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPost, cfg.GlobalIgnorePost) {
+				sendStartNotification(ctx, dispatch, "global:post", event)
+				hooksExecuted = true
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, "global:post", event); err != nil {
 					if state == "success" {
 						state = "failure"
@@ -318,9 +338,11 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			}
 		}
 
-		// Global notify (filtered by notify_on)
-		if hooks.Notify != "" && ShouldNotify(hooks.NotifyOn, state) {
+		// Global notify (filtered by notify_on, only if hooks ran)
+		if hooksExecuted && hooks.Notify != "" && ShouldNotify(hooks.NotifyOn, state) {
 			sendNotification(ctx, dispatch, "global:summary", hooks.Notify, lastOut, state, hooks.NotifyOn, event)
+		} else if !hooksExecuted && hooks.Notify != "" {
+			log.Debug().Str("event", eventLabel(event)).Msg("skipping notification (no hooks executed)")
 		}
 	}
 
@@ -358,5 +380,24 @@ func sendNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookNa
 	}
 
 	log.Info().Str("hook", hookName).Msgf("Event %s on %s: queuing notification", eventLabel(event), event.Repo)
+	dispatch.Send(ctx, n)
+}
+
+// sendStartNotification sends a built-in "Starting <hookLabel>" notification
+// with state "pending" before a hook begins execution.
+func sendStartNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookLabel string, event protocol.EventMsg) {
+	n := notifier.Notification{
+		Repo:       event.Repo,
+		Event:      event.GitHubEvent,
+		Action:     event.Action,
+		HookName:   hookLabel,
+		Message:    fmt.Sprintf("Starting %s", hookLabel),
+		Sender:     event.Sender,
+		DeliveryID: event.DeliveryID,
+		State:      "pending",
+		RawPayload: event.Payload,
+	}
+
+	log.Debug().Str("hook", hookLabel).Msgf("Event %s on %s: queuing start notification", eventLabel(event), event.Repo)
 	dispatch.Send(ctx, n)
 }

@@ -52,9 +52,12 @@ func (n *SlackNotifier) Ping(ctx context.Context) error {
 func (n *SlackNotifier) Notify(ctx context.Context, notification Notification) error {
 	message := ResolveTemplate(notification.Message, notification)
 
-	color := "#36a64f" // green
-	if notification.State == "failure" {
-		color = "#ff0000"
+	color := "#36a64f" // green: success
+	switch notification.State {
+	case "failure":
+		color = "#ff0000" // red
+	case "pending":
+		color = "#3498db" // blue
 	}
 
 	// Build Block Kit payload with attachment for color sidebar.
