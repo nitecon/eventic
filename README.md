@@ -199,6 +199,14 @@ global-ignore-post:
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
   post: "claude -p 'Validate the repository at ${EVENTIC_REPOS}/${EVENTIC_REPO} and report any issues.'"
+  notify: "Global hook {{.State}} for {{.Repo}}"
+  notify_on: [failure]
+notifier:
+  enabled:
+    - discord
+  settings:
+    discord:
+      webhook_url: "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
 subscribe:
   - "myuser/*"
   - "myworkorg/*"
@@ -217,6 +225,9 @@ subscribe:
 | `max-workers` | Maximum concurrent event processors (defaults to the number of CPUs). Events for the same repo are always serialized |
 | `global-hooks.pre` | Fallback pre hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
 | `global-hooks.post` | Fallback post hook — runs for repos that have no `.eventic.yaml` or `.deploy/deploy.yml` |
+| `global-hooks.notify` | Notification template for global hooks (supports Go templates, see [Notifications](#notifications)) |
+| `global-hooks.notify_on` | When to send global hook notifications: `[failure]`, `[success]`, or `[success, failure]`. Omit to always notify |
+| `notifier` | Notification channel configuration block (see [Notifications](#notifications)) |
 | `global-ignore-pre` | List of event patterns to skip global pre hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
 | `global-ignore-post` | List of event patterns to skip global post hook execution (see [Global Ignore Patterns](#global-ignore-patterns)) |
 | `global-allowed-pre` | Allowlist of event patterns for global pre hook — when non-empty, **only** matching events run the hook and ignore patterns are disregarded (see [Global Allowed Patterns](#global-allowed-patterns)) |
@@ -433,11 +444,50 @@ Approvals are persisted in `/etc/eventic/approvals.json` (configurable via `appr
 
 ## Notifications
 
-Eventic supports multiple notification channels (Slack, Discord, etc.) that can be triggered by global or per-repo hooks.
+Eventic supports multiple notification channels (Discord, Slack, etc.) that can be triggered by global or per-repo hooks. Notifications are a two-step process: **configure a channel** in your client config, then **add `notify` fields** to your hooks.
 
-### Configuration
+### Quick Start: Discord Webhook
 
-Add a `notifier` block to `/etc/eventic/config.yaml`:
+The fastest way to get notifications working is with a Discord webhook:
+
+1. **Create a Discord webhook** — In your Discord server, go to **Server Settings > Integrations > Webhooks > New Webhook**. Choose the target channel, copy the **Webhook URL**.
+
+2. **Add the notifier to your client config** (`/etc/eventic/config.yaml`):
+
+   ```yaml
+   notifier:
+     enabled:
+       - discord
+     settings:
+       discord:
+         webhook_url: "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
+   ```
+
+3. **Add `notify` to a hook** — either in your client config's global hooks or in a repo's `.eventic.yaml`:
+
+   ```yaml
+   # In /etc/eventic/config.yaml (global hooks)
+   global-hooks:
+     post: "make build"
+     notify: "Build {{.State}} for {{.Repo}}"
+     notify_on: [failure]
+   ```
+
+   ```yaml
+   # Or in your repo's .eventic.yaml (per-repo hooks)
+   events:
+     push:
+       post: "make deploy"
+       notify: "Deploy {{.State}} for {{.Repo}} by {{.Sender}}"
+   ```
+
+4. **Restart the client** — `sudo systemctl restart eventic`. At startup, Eventic will health-check the webhook and log the result.
+
+That's it — the next matching event will send a notification to your Discord channel.
+
+### Notification Channels
+
+Add a `notifier` block to `/etc/eventic/config.yaml`. List channel names in `enabled` and provide their settings:
 
 ```yaml
 notifier:
@@ -449,39 +499,65 @@ notifier:
       webhook_url: "https://discord.com/api/webhooks/..."
     bot:
       token: "your-bot-token"       # Can also use DISCORD_BOT_TOKEN env
-      guild_id: "your-guild-id"    # Can also use DISCORD_GUILD_ID env
-      category_id: "1234..."       # Optional: channels created here
+      guild_id: "your-guild-id"     # Can also use DISCORD_GUILD_ID env
+      category_id: "1234..."        # Optional: channels created here
+      channel_id: "5678..."         # Optional: send all messages to one channel
     slack:
       webhook_url: "https://hooks.slack.com/services/..."
 ```
 
+| Channel | Required Settings | Description |
+|---|---|---|
+| `discord` | `webhook_url` | Posts to a Discord channel via webhook (simplest setup) |
+| `bot` | `token` + (`guild_id` or `channel_id`) | Uses a Discord Bot to post rich embeds; auto-creates per-repo channels |
+| `slack` | `webhook_url` | Posts to a Slack channel via incoming webhook |
+
+You can enable multiple channels simultaneously — all enabled channels receive every notification.
+
 ### Discord Bot Setup
 
-If using the `bot` notifier:
+If using the `bot` channel instead of a simple webhook:
+
 1. Create a Discord Application at [discord.com/developers](https://discord.com/developers/applications).
 2. Add a Bot and copy the **Token**.
 3. Enable **Manage Channels** and **Send Messages** permissions.
-4. Add the bot to your server.
-5. Eventic will automatically create a channel for each repository (e.g., `#org-repo`) inside the specified `category_id`.
+4. Invite the bot to your server using the OAuth2 URL with the `bot` scope.
+5. Set `guild_id` to your server ID. Optionally set `category_id` — Eventic will auto-create a text channel per repository (e.g., `#org-repo`) under that category.
+6. Alternatively, set `channel_id` to send all notifications to a single channel.
 
-### Using Notifications in Hooks
+### Adding Notifications to Hooks
 
-Define a `notify` field in your `.eventic.yaml`:
+Notifications are triggered by adding `notify` (and optionally `notify_on`) fields to hooks. This works in two places:
+
+**Global hooks** in `/etc/eventic/config.yaml`:
+
+```yaml
+global-hooks:
+  pre: "echo preparing ${EVENTIC_REPO}..."
+  post: "make build"
+  notify: "Global hook {{.State}} for {{.Repo}}"
+  notify_on: [failure]  # only notify on failure
+```
+
+**Per-repo hooks** in `.eventic.yaml` at the repository root:
 
 ```yaml
 hooks:
   pre: "echo starting..."
   notify: "Build started for {{.Repo}}"
-  notify_on: [failure]  # Only notify on failure (optional)
+  notify_on: [failure]
 events:
   push:
     post: "make deploy"
     notify: "Deployment {{.State}}! Output: {{.Stdout}}"
-    notify_on: [success, failure]  # Notify on both (default if omitted)
+    notify_on: [success, failure]
   pull_request.opened:
     post: "make lint"
     notify: 'PR "{{.PayloadField "pull_request.title"}}" by {{.Sender}}'
     notify_on: [failure]
+  release.published:
+    post: "/opt/scripts/release.sh"
+    notify: "Release {{.PayloadField \"release.tag_name\"}} published for {{.Repo}}"
 ```
 
 ### Notification Filtering
