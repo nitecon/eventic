@@ -15,57 +15,52 @@ import (
 
 // HookSet holds all hooks resolved for a single event.
 type HookSet struct {
-	Pre      string // global pre hook — runs for every event
-	Post     string // global post hook — runs for every event
-	EventPre  string // event-specific pre hook
-	EventPost string // event-specific post hook
+	Pre         string   // global pre hook — runs for every event
+	Post        string   // global post hook — runs for every event
+	Notify      string   // global notify template
+	NotifyOn    []string // global notify filter (e.g. ["failure"])
+	EventPre    string   // event-specific pre hook
+	EventPost   string   // event-specific post hook
+	EventNotify string   // event-specific notify template
+	EventNotifyOn []string // event-specific notify filter
 }
 
-// EventHooks defines pre/post hooks for a specific event or event.action.
+// EventHooks defines pre/post/notify hooks for a specific event or event.action.
 type EventHooks struct {
-	Pre  string `yaml:"pre"`
-	Post string `yaml:"post"`
+	Pre      string   `yaml:"pre"`
+	Post     string   `yaml:"post"`
+	Notify   string   `yaml:"notify"`
+	NotifyOn []string `yaml:"notify_on"` // e.g. ["failure"], ["success", "failure"]
 }
 
 // EventicConfig is the in-repo .eventic.yaml format.
-//
-// Example:
-//
-//	hooks:
-//	  pre: "echo preparing..."
-//	  post: "echo done"
-//	events:
-//	  push:
-//	    post: "bruce install .deploy/deploy.yml"
-//	  pull_request:
-//	    post: "make lint"
-//	  pull_request.opened:
-//	    post: "claude -p 'Review this PR' --headless"
-//	  pull_request.synchronize:
-//	    post: "make test"
-//	  release.published:
-//	    post: "/opt/scripts/notify-release.sh"
-//	  workflow_run.completed:
-//	    post: "/opt/scripts/on-build-failure.sh"
-//	  issues.opened:
-//	    post: "claude -p 'Triage this issue' --headless"
-//	  check_suite.completed:
-//	    post: "/opt/scripts/check-status.sh"
-//	  deployment_status:
-//	    post: "/opt/scripts/deploy-status.sh"
 type EventicConfig struct {
 	Hooks struct {
-		Pre  string `yaml:"pre"`
-		Post string `yaml:"post"`
+		Pre      string   `yaml:"pre"`
+		Post     string   `yaml:"post"`
+		Notify   string   `yaml:"notify"`
+		NotifyOn []string `yaml:"notify_on"`
 	} `yaml:"hooks"`
 	Events map[string]EventHooks `yaml:"events"`
 }
 
+// ShouldNotify checks whether a notification should fire based on the
+// notify_on filter and the current state. An empty filter means always notify.
+func ShouldNotify(notifyOn []string, state string) bool {
+	if len(notifyOn) == 0 {
+		return true
+	}
+	for _, s := range notifyOn {
+		if s == state {
+			return true
+		}
+	}
+	return false
+}
+
 // DiscoverHooks checks the repo for .eventic.yaml or .deploy/deploy.yml
 // and resolves global + event-specific hooks for the given event.
-// globalPre and globalPost are fallback hooks from the client config that
-// are used when a repo has no hooks of its own.
-func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPost string) HookSet {
+func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPost, globalNotify string, globalNotifyOn []string) HookSet {
 	var hooks HookSet
 
 	configPath := filepath.Join(repoPath, ".eventic.yaml")
@@ -75,17 +70,21 @@ func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPo
 			// Global hooks
 			hooks.Pre = cfg.Hooks.Pre
 			hooks.Post = cfg.Hooks.Post
+			hooks.Notify = cfg.Hooks.Notify
+			hooks.NotifyOn = cfg.Hooks.NotifyOn
 
 			// Event-specific hooks: check "event.action" first, then "event"
 			eventHooks := resolveEventHooks(cfg.Events, event.GitHubEvent, event.Action)
 			hooks.EventPre = eventHooks.Pre
 			hooks.EventPost = eventHooks.Post
+			hooks.EventNotify = eventHooks.Notify
+			hooks.EventNotifyOn = eventHooks.NotifyOn
 
 			log.Debug().
 				Str("config", configPath).
 				Str("event", event.GitHubEvent).
 				Str("action", event.Action).
-				Bool("has_event_hook", hooks.EventPre != "" || hooks.EventPost != "").
+				Bool("has_event_hook", hooks.EventPre != "" || hooks.EventPost != "" || hooks.EventNotify != "").
 				Msg("using .eventic.yaml")
 			return hooks
 		}
@@ -100,13 +99,16 @@ func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPo
 	}
 
 	// Fallback: client-level global hooks
-	if globalPre != "" || globalPost != "" {
+	if globalPre != "" || globalPost != "" || globalNotify != "" {
 		hooks.Pre = globalPre
 		hooks.Post = globalPost
+		hooks.Notify = globalNotify
+		hooks.NotifyOn = globalNotifyOn
 		log.Debug().
 			Str("repo", repoPath).
 			Bool("has_pre", globalPre != "").
 			Bool("has_post", globalPost != "").
+			Bool("has_notify", globalNotify != "").
 			Msg("using client global hooks")
 		return hooks
 	}
@@ -237,3 +239,4 @@ func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, ev
 
 	return outStr, nil
 }
+

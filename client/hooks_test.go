@@ -53,12 +53,12 @@ func TestMatchesIgnorePattern(t *testing.T) {
 
 func TestShouldRunGlobalHook(t *testing.T) {
 	tests := []struct {
-		name           string
-		eventType      string
-		action         string
+		name            string
+		eventType       string
+		action          string
 		allowedPatterns []string
-		ignorePatterns []string
-		want           bool
+		ignorePatterns  []string
+		want            bool
 	}{
 		// Allowed list empty — falls back to ignore logic
 		{"no allowed, no ignore", "push", "", nil, nil, true},
@@ -122,6 +122,33 @@ func TestShouldIgnoreGlobalHook(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("shouldIgnoreGlobalHook(%q, %q, %v) = %v, want %v",
 					tt.eventType, tt.action, tt.patterns, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldNotify(t *testing.T) {
+	tests := []struct {
+		name     string
+		notifyOn []string
+		state    string
+		want     bool
+	}{
+		{"empty filter always notifies on success", nil, "success", true},
+		{"empty filter always notifies on failure", nil, "failure", true},
+		{"failure-only filter blocks success", []string{"failure"}, "success", false},
+		{"failure-only filter allows failure", []string{"failure"}, "failure", true},
+		{"success-only filter allows success", []string{"success"}, "success", true},
+		{"success-only filter blocks failure", []string{"success"}, "failure", false},
+		{"multi-state filter allows failure", []string{"success", "failure"}, "failure", true},
+		{"multi-state filter allows success", []string{"success", "failure"}, "success", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ShouldNotify(tt.notifyOn, tt.state)
+			if got != tt.want {
+				t.Errorf("ShouldNotify(%v, %q) = %v, want %v", tt.notifyOn, tt.state, got, tt.want)
 			}
 		})
 	}

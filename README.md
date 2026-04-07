@@ -401,6 +401,125 @@ The client resolves hooks using the following precedence (first match wins):
 
 This means you can set up default automation for all subscribed repos by adding a `global-hooks:` block to your client config, and individual repos can override it by adding their own `.eventic.yaml`.
 
+### Approval System
+
+Eventic supports an optional approval gate that blocks events from unapproved repositories or senders. To enable it, add `require_approval: true` to your `config.yaml`:
+
+```yaml
+require_approval: true
+approvals_path: "/etc/eventic/approvals.json"  # optional, this is the default
+```
+
+When enabled, blocked events trigger a notification with the required approval command.
+
+```bash
+# Approve a specific repository
+eventic-client approve --repo "org/repo"
+
+# Approve a specific GitHub user
+eventic-client approve --sender "username"
+
+# Revoke approval
+eventic-client revoke --repo "org/repo"
+eventic-client revoke --sender "username"
+
+# List all current approvals
+eventic-client list-approvals
+```
+
+Approvals are persisted in `/etc/eventic/approvals.json` (configurable via `approvals_path` in `config.yaml`).
+
+---
+
+## Notifications
+
+Eventic supports multiple notification channels (Slack, Discord, etc.) that can be triggered by global or per-repo hooks.
+
+### Configuration
+
+Add a `notifier` block to `/etc/eventic/config.yaml`:
+
+```yaml
+notifier:
+  enabled:
+    - discord
+    - slack
+  settings:
+    discord:
+      webhook_url: "https://discord.com/api/webhooks/..."
+    bot:
+      token: "your-bot-token"       # Can also use DISCORD_BOT_TOKEN env
+      guild_id: "your-guild-id"    # Can also use DISCORD_GUILD_ID env
+      category_id: "1234..."       # Optional: channels created here
+    slack:
+      webhook_url: "https://hooks.slack.com/services/..."
+```
+
+### Discord Bot Setup
+
+If using the `bot` notifier:
+1. Create a Discord Application at [discord.com/developers](https://discord.com/developers/applications).
+2. Add a Bot and copy the **Token**.
+3. Enable **Manage Channels** and **Send Messages** permissions.
+4. Add the bot to your server.
+5. Eventic will automatically create a channel for each repository (e.g., `#org-repo`) inside the specified `category_id`.
+
+### Using Notifications in Hooks
+
+Define a `notify` field in your `.eventic.yaml`:
+
+```yaml
+hooks:
+  pre: "echo starting..."
+  notify: "Build started for {{.Repo}}"
+  notify_on: [failure]  # Only notify on failure (optional)
+events:
+  push:
+    post: "make deploy"
+    notify: "Deployment {{.State}}! Output: {{.Stdout}}"
+    notify_on: [success, failure]  # Notify on both (default if omitted)
+  pull_request.opened:
+    post: "make lint"
+    notify: 'PR "{{.PayloadField "pull_request.title"}}" by {{.Sender}}'
+    notify_on: [failure]
+```
+
+### Notification Filtering
+
+Use `notify_on` to control when notifications fire:
+
+| Value | Behavior |
+|---|---|
+| *(omitted)* | Always notify (default) |
+| `[failure]` | Only notify on hook failure |
+| `[success]` | Only notify on success |
+| `[success, failure]` | Explicit: notify on both |
+
+### Metadata & Templating
+
+Notifications support Go templates with the following fields:
+
+| Field | Description |
+|---|---|
+| `{{.Repo}}` | Repository name |
+| `{{.Event}}` | GitHub event type |
+| `{{.Action}}` | Event action (opened, synchronize, etc.) |
+| `{{.State}}` | Execution state (`success` or `failure`) |
+| `{{.Stdout}}` | Output of the executed hook |
+| `{{.Sender}}` | GitHub user who triggered the event |
+| `{{.PayloadField "key.path"}}` | Extract any field from the raw GitHub webhook payload |
+
+**Payload field examples:**
+- `{{.PayloadField "pull_request.title"}}` — PR title
+- `{{.PayloadField "commits.0.message"}}` — First commit message
+- `{{.PayloadField "head_commit.author.name"}}` — Push author name
+
+---
+
+## Developing Plugins
+
+Eventic is designed to be easily extensible. To learn how to build your own notification plugin (e.g., for Email, Telegram, or internal APIs), see [docs/Notifications.md](docs/Notifications.md).
+
 ---
 
 ## Building from Source
