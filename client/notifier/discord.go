@@ -14,15 +14,15 @@ import (
 )
 
 func init() {
-	Register("discord", func(cfg map[string]interface{}) (Notifier, error) {
+	Register("discord_webhook", func(cfg map[string]interface{}) (Notifier, error) {
 		webhook, _ := cfg["webhook_url"].(string)
 		if webhook == "" {
-			return nil, fmt.Errorf("discord: webhook_url is required")
+			return nil, fmt.Errorf("discord_webhook: webhook_url is required")
 		}
 		return &DiscordWebhookNotifier{WebhookURL: webhook}, nil
 	})
 
-	Register("bot", func(cfg map[string]interface{}) (Notifier, error) {
+	Register("discord", func(cfg map[string]interface{}) (Notifier, error) {
 		token, _ := cfg["token"].(string)
 		if t := os.Getenv("DISCORD_BOT_TOKEN"); t != "" {
 			token = t
@@ -35,15 +35,15 @@ func init() {
 		channelID, _ := cfg["channel_id"].(string)
 
 		if token == "" {
-			return nil, fmt.Errorf("bot: token is required (config or DISCORD_BOT_TOKEN env)")
+			return nil, fmt.Errorf("discord: token is required (config or DISCORD_BOT_TOKEN env)")
 		}
 		if guildID == "" && channelID == "" {
-			return nil, fmt.Errorf("bot: guild_id or channel_id is required")
+			return nil, fmt.Errorf("discord: guild_id or channel_id is required")
 		}
 
 		dg, err := discordgo.New("Bot " + token)
 		if err != nil {
-			return nil, fmt.Errorf("bot: error creating Discord session: %w", err)
+			return nil, fmt.Errorf("discord: error creating Discord session: %w", err)
 		}
 
 		return &DiscordBotNotifier{

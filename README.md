@@ -206,7 +206,8 @@ notifier:
     - discord
   settings:
     discord:
-      webhook_url: "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
+      token: "your-bot-token"
+      guild_id: "your-guild-id"
 subscribe:
   - "myuser/*"
   - "myworkorg/*"
@@ -457,9 +458,9 @@ The fastest way to get notifications working is with a Discord webhook:
    ```yaml
    notifier:
      enabled:
-       - discord
+       - discord_webhook
      settings:
-       discord:
+       discord_webhook:
          webhook_url: "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
    ```
 
@@ -485,6 +486,29 @@ The fastest way to get notifications working is with a Discord webhook:
 
 That's it — the next matching event will send a notification to your Discord channel.
 
+### Quick Start: Discord Bot
+
+For richer embeds and automatic per-repo channel creation, use the Discord bot notifier:
+
+1. **Create a Discord Application** at [discord.com/developers](https://discord.com/developers/applications). Add a Bot, copy the **Token**.
+2. **Invite the bot** to your server with the `bot` scope and **Manage Channels** + **Send Messages** permissions.
+3. **Add the notifier to your client config** (`/etc/eventic/config.yaml`):
+
+   ```yaml
+   notifier:
+     enabled:
+       - discord
+     settings:
+       discord:
+         token: "your-bot-token"       # or set DISCORD_BOT_TOKEN env var
+         guild_id: "your-guild-id"     # or set DISCORD_GUILD_ID env var
+         category_id: "1234..."        # optional: auto-created channels go here
+   ```
+
+4. **Add `notify` to a hook** and **restart the client** (same as the webhook steps above).
+
+Eventic will automatically create a text channel per repository (e.g., `#org-repo`) inside the specified category. To send all notifications to a single channel instead, use `channel_id` in place of `guild_id`.
+
 ### Notification Channels
 
 Add a `notifier` block to `/etc/eventic/config.yaml`. List channel names in `enabled` and provide their settings:
@@ -493,37 +517,27 @@ Add a `notifier` block to `/etc/eventic/config.yaml`. List channel names in `ena
 notifier:
   enabled:
     - discord
+    - discord_webhook
     - slack
   settings:
     discord:
-      webhook_url: "https://discord.com/api/webhooks/..."
-    bot:
       token: "your-bot-token"       # Can also use DISCORD_BOT_TOKEN env
       guild_id: "your-guild-id"     # Can also use DISCORD_GUILD_ID env
-      category_id: "1234..."        # Optional: channels created here
+      category_id: "1234..."        # Optional: auto-created channels go here
       channel_id: "5678..."         # Optional: send all messages to one channel
+    discord_webhook:
+      webhook_url: "https://discord.com/api/webhooks/..."
     slack:
       webhook_url: "https://hooks.slack.com/services/..."
 ```
 
 | Channel | Required Settings | Description |
 |---|---|---|
-| `discord` | `webhook_url` | Posts to a Discord channel via webhook (simplest setup) |
-| `bot` | `token` + (`guild_id` or `channel_id`) | Uses a Discord Bot to post rich embeds; auto-creates per-repo channels |
+| `discord` | `token` + (`guild_id` or `channel_id`) | Discord Bot with rich embeds; auto-creates per-repo channels |
+| `discord_webhook` | `webhook_url` | Posts to a Discord channel via webhook (simplest setup) |
 | `slack` | `webhook_url` | Posts to a Slack channel via incoming webhook |
 
-You can enable multiple channels simultaneously — all enabled channels receive every notification.
-
-### Discord Bot Setup
-
-If using the `bot` channel instead of a simple webhook:
-
-1. Create a Discord Application at [discord.com/developers](https://discord.com/developers/applications).
-2. Add a Bot and copy the **Token**.
-3. Enable **Manage Channels** and **Send Messages** permissions.
-4. Invite the bot to your server using the OAuth2 URL with the `bot` scope.
-5. Set `guild_id` to your server ID. Optionally set `category_id` — Eventic will auto-create a text channel per repository (e.g., `#org-repo`) under that category.
-6. Alternatively, set `channel_id` to send all notifications to a single channel.
+You can enable multiple channels simultaneously — all enabled channels receive every notification. For example, you can use `discord` for per-repo channels and add `discord_webhook` as an extra notification point to a shared ops channel.
 
 ### Adding Notifications to Hooks
 
