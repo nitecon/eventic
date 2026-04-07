@@ -503,11 +503,12 @@ For richer embeds and automatic per-repo channel creation, use the Discord bot n
          token: "your-bot-token"       # or set DISCORD_BOT_TOKEN env var
          guild_id: "your-guild-id"     # or set DISCORD_GUILD_ID env var
          category_id: "1234..."        # optional: auto-created channels go here
+         notify_channel: "eventic"     # optional: route all notifications to this channel name (must exist)
    ```
 
 4. **Add `notify` to a hook** and **restart the client** (same as the webhook steps above).
 
-Eventic will automatically create a text channel per repository (e.g., `#org-repo`) inside the specified category. To send all notifications to a single channel instead, use `channel_id` in place of `guild_id`.
+Eventic will automatically create a text channel per repository (e.g., `#org-repo`) inside the specified category. To send all notifications to a single channel instead, use `channel_id` (static channel ID) or `notify_channel` (channel name lookup) in place of per-repo auto-creation. When `notify_channel` is set, the named channel must already exist — Eventic will look it up by name but will not create it.
 
 ### Notification Channels
 
@@ -524,7 +525,8 @@ notifier:
       token: "your-bot-token"       # Can also use DISCORD_BOT_TOKEN env
       guild_id: "your-guild-id"     # Can also use DISCORD_GUILD_ID env
       category_id: "1234..."        # Optional: auto-created channels go here
-      channel_id: "5678..."         # Optional: send all messages to one channel
+      channel_id: "5678..."         # Optional: send all messages to one channel (static ID)
+      notify_channel: "eventic"     # Optional: send all messages to this channel name (must exist; also DISCORD_NOTIFY_CHANNEL env)
     discord_webhook:
       webhook_url: "https://discord.com/api/webhooks/..."
     slack:
@@ -533,7 +535,7 @@ notifier:
 
 | Channel | Required Settings | Description |
 |---|---|---|
-| `discord` | `token` + (`guild_id` or `channel_id`) | Discord Bot with rich embeds; auto-creates per-repo channels |
+| `discord` | `token` + (`guild_id` or `channel_id`) | Discord Bot with rich embeds; auto-creates per-repo channels. Use `notify_channel` (name) or `channel_id` (ID) to route all notifications to one channel instead. |
 | `discord_webhook` | `webhook_url` | Posts to a Discord channel via webhook (simplest setup) |
 | `slack` | `webhook_url` | Posts to a Slack channel via incoming webhook |
 
