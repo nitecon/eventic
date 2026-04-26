@@ -241,12 +241,12 @@ subscribe:
 | `web.listen` | Address for the local web console. Defaults to `127.0.0.1:16384` when enabled |
 | `web.max_events` | Number of recent client executions retained in memory for replay/API startup. Defaults to `100` |
 | `web.max_output_bytes` | Maximum retained output bytes per hook/description. Defaults to `65536` |
-| `state.enabled` | Enables the client-local SQLite project state database. Defaults to `false` |
+| `state.enabled` | Enables the client-local persistent SQLite project state database. Defaults to `false` |
 | `state.path` | SQLite database path for project state. Defaults to `/opt/eventic/state/eventic.db` when enabled |
 
 ### Client State and Web Console
 
-The project state database and the web server are both opt-in. If `state.enabled` is not true, no SQLite database is opened or written. If `web.enabled` is not true, the client does not start an HTTP listener.
+Persistent project state and the web server are both opt-in. If `state.enabled` is not true, no project state is written to disk. If `web.enabled` is not true, the client does not start an HTTP listener.
 
 To persist the latest managed-project state to SQLite without exposing an HTTP endpoint:
 
@@ -274,16 +274,18 @@ When `web.enabled` is true, the client starts a local-only web console on `web.l
 
 The dashboard groups streamed events by repository. The left side shows one tab-like entry per `owner/repo`; selecting it shows that repository's recent event history. The browser keeps the last 50 streamed events per repository for the current page session.
 
+On startup, the client scans `repos_dir` and adds every checked-out repository it finds to the project inventory. That means `/projects` includes repositories that exist on disk even if Eventic has not run hooks for them since the client started. Repositories discovered later from webhook events are added immediately, then enriched with their current branch's `.eventic.yaml` or `.deploy/deploy.yml` configuration after clone/checkout completes.
+
 | Endpoint | Purpose |
 |---|---|
 | `/` | Human-readable dashboard for recent events and hook output |
 | `/events` | JSON array of recent executions, newest first |
 | `/events/stream` | Server-Sent Events stream for live execution updates |
-| `/projects` | JSON array of persisted project states from SQLite, newest first |
-| `/projects/owner/repo` | JSON object for a single persisted project state, including its persisted recent event history |
+| `/projects` | JSON array of managed projects, including repos found on disk at startup |
+| `/projects/owner/repo` | JSON object for a single managed project, including configured event slots and latest output |
 | `/healthz` | Local health check |
 
-The SQLite database stores one current row per managed repository in the `projects` table. Each row contains the repo name, latest GitHub event/action/delivery ID, final state, latest combined stdout/stderr output, latest description, checked-out git ref, checked-out commit hash, and timing fields. SQLite also keeps the last 5 execution records per repository in `project_events`; older rows for that repository are pruned automatically.
+When persistent state is enabled, SQLite stores one current row per managed repository in the `projects` table. Each row contains the repo name, latest GitHub event/action/delivery ID, final state, latest combined stdout/stderr output, latest description, checked-out git ref, checked-out commit hash, and timing fields. SQLite also stores configured hook slots in `configured_events`: client-level global hooks, repo-level `.eventic.yaml` global hooks, repo-level `.eventic.yaml` `events:` hooks, and `.deploy/deploy.yml` fallback hooks. Configured event slots are present with `state: "no_runs"` and empty output until a matching hook runs. A compatibility `project_events` history table keeps the last 5 delivery records per repository.
 
 For Kubernetes clients, mount persistent storage at `/opt/eventic/state` or set `state.path` to a path inside your own volume mount:
 

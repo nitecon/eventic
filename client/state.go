@@ -10,13 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	defaultStateDBPath         = "/opt/eventic/state/eventic.db"
-	defaultProjectEventsRetain = 5
+	defaultStateDBPath = "/opt/eventic/state/eventic.db"
 )
 
 // StateConfig controls the client-local persistent project database.
@@ -27,20 +28,21 @@ type StateConfig struct {
 
 // ProjectState is the persisted latest state for a managed repository.
 type ProjectState struct {
-	Repo           string         `json:"repo"`
-	Ref            string         `json:"ref,omitempty"`
-	Hash           string         `json:"hash,omitempty"`
-	Event          string         `json:"event,omitempty"`
-	Action         string         `json:"action,omitempty"`
-	DeliveryID     string         `json:"delivery_id,omitempty"`
-	State          string         `json:"state"`
-	LatestOutput   string         `json:"latest_output,omitempty"`
-	Description    string         `json:"description,omitempty"`
-	StartedAt      time.Time      `json:"started_at"`
-	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DurationMillis int64          `json:"duration_ms,omitempty"`
-	RecentEvents   []ProjectEvent `json:"recent_events,omitempty"`
+	Repo             string            `json:"repo"`
+	Ref              string            `json:"ref,omitempty"`
+	Hash             string            `json:"hash,omitempty"`
+	Event            string            `json:"event,omitempty"`
+	Action           string            `json:"action,omitempty"`
+	DeliveryID       string            `json:"delivery_id,omitempty"`
+	State            string            `json:"state"`
+	LatestOutput     string            `json:"latest_output,omitempty"`
+	Description      string            `json:"description,omitempty"`
+	StartedAt        time.Time         `json:"started_at"`
+	FinishedAt       *time.Time        `json:"finished_at,omitempty"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	DurationMillis   int64             `json:"duration_ms,omitempty"`
+	RecentEvents     []ProjectEvent    `json:"recent_events,omitempty"`
+	ConfiguredEvents []ConfiguredEvent `json:"configured_events,omitempty"`
 }
 
 // ProjectEvent is a bounded persisted execution history item for one repo.
@@ -55,6 +57,26 @@ type ProjectEvent struct {
 	LatestOutput   string     `json:"latest_output,omitempty"`
 	Description    string     `json:"description,omitempty"`
 	StartedAt      time.Time  `json:"started_at"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DurationMillis int64      `json:"duration_ms,omitempty"`
+}
+
+// ConfiguredEvent is a configured hook slot for a repo, with latest run output.
+type ConfiguredEvent struct {
+	Repo           string     `json:"repo"`
+	EventKey       string     `json:"event_key"`
+	Source         string     `json:"source"`
+	Hook           string     `json:"hook"`
+	Event          string     `json:"event,omitempty"`
+	Action         string     `json:"action,omitempty"`
+	DeliveryID     string     `json:"delivery_id,omitempty"`
+	State          string     `json:"state"`
+	LatestOutput   string     `json:"latest_output"`
+	Description    string     `json:"description,omitempty"`
+	Ref            string     `json:"ref,omitempty"`
+	Hash           string     `json:"hash,omitempty"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
 	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	DurationMillis int64      `json:"duration_ms,omitempty"`
@@ -78,6 +100,14 @@ func OpenProjectStore(ctx context.Context, cfg StateConfig) (*ProjectStore, erro
 		return nil, fmt.Errorf("create state db directory: %w", err)
 	}
 
+	return openProjectStore(ctx, path)
+}
+
+func OpenMemoryProjectStore(ctx context.Context) (*ProjectStore, error) {
+	return openProjectStore(ctx, "file:eventic-project-state?mode=memory&cache=shared")
+}
+
+func openProjectStore(ctx context.Context, path string) (*ProjectStore, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open state db: %w", err)
@@ -99,7 +129,7 @@ func (s *ProjectStore) Close() error {
 	return s.db.Close()
 }
 
-func (s *ProjectStore) SeedFromReposDir(ctx context.Context, reposDir string) {
+func (s *ProjectStore) SeedFromReposDir(ctx context.Context, reposDir string, cfg Config) {
 	if s == nil || reposDir == "" {
 		return
 	}
@@ -128,6 +158,7 @@ func (s *ProjectStore) SeedFromReposDir(ctx context.Context, reposDir string) {
 			return filepath.SkipDir
 		}
 		s.UpsertManagedProject(ctx, repo, ref, hash)
+		s.SyncConfiguredEvents(ctx, repo, repoPath, cfg)
 		return filepath.SkipDir
 	})
 	if err != nil {
@@ -183,6 +214,59 @@ func (s *ProjectStore) StartProject(ctx context.Context, event ExecutionEvent) {
 	s.RecordProjectEvent(ctx, event)
 }
 
+func (s *ProjectStore) SyncConfiguredEvents(ctx context.Context, repo, repoPath string, cfg Config) {
+	if s == nil {
+		return
+	}
+	now := time.Now()
+	configured := configuredEventsForRepo(repo, repoPath, cfg)
+	if len(configured) == 0 {
+		if repoPath != "" {
+			_, err := s.db.ExecContext(ctx, `DELETE FROM configured_events WHERE repo = ?`, repo)
+			if err != nil {
+				logStateError(err, "clear configured events")
+			}
+		}
+		return
+	}
+
+	keys := make([]string, 0, len(configured))
+	for _, event := range configured {
+		keys = append(keys, event.EventKey)
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO configured_events (
+				repo, event_key, source, hook, event, action, state, latest_output, description, updated_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, 'no_runs', '', '', ?)
+			ON CONFLICT(repo, event_key) DO UPDATE SET
+				source = excluded.source,
+				hook = excluded.hook,
+				event = excluded.event,
+				action = excluded.action,
+				updated_at = excluded.updated_at
+		`, repo, event.EventKey, event.Source, event.Hook, event.Event, event.Action, now)
+		if err != nil {
+			logStateError(err, "sync configured event")
+		}
+	}
+
+	if repoPath != "" {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(keys)), ",")
+		args := make([]any, 0, len(keys)+1)
+		args = append(args, repo)
+		for _, key := range keys {
+			args = append(args, key)
+		}
+		_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+			DELETE FROM configured_events
+			WHERE repo = ? AND event_key NOT IN (%s)
+		`, placeholders), args...)
+		if err != nil {
+			logStateError(err, "prune configured events")
+		}
+	}
+}
+
 func (s *ProjectStore) UpdateGitState(ctx context.Context, repo, ref, hash string) {
 	if s == nil {
 		return
@@ -208,9 +292,19 @@ func (s *ProjectStore) UpdateGitState(ctx context.Context, repo, ref, hash strin
 	if err != nil {
 		logStateError(err, "update project event git state")
 	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE configured_events
+		SET ref = COALESCE(NULLIF(?, ''), ref),
+			hash = ?,
+			updated_at = ?
+		WHERE repo = ?
+	`, ref, hash, time.Now(), repo)
+	if err != nil {
+		logStateError(err, "update configured event git state")
+	}
 }
 
-func (s *ProjectStore) UpdateOutput(ctx context.Context, repo, state, output string) {
+func (s *ProjectStore) UpdateOutput(ctx context.Context, repo string, event protocol.EventMsg, hookName, state, output string) {
 	if s == nil {
 		return
 	}
@@ -235,6 +329,7 @@ func (s *ProjectStore) UpdateOutput(ctx context.Context, repo, state, output str
 	if err != nil {
 		logStateError(err, "update project event output")
 	}
+	s.UpdateConfiguredEvent(ctx, repo, event, hookName, state, output, "")
 }
 
 func (s *ProjectStore) FinishProject(ctx context.Context, event ExecutionEvent) {
@@ -278,7 +373,11 @@ func (s *ProjectStore) ListProjects(ctx context.Context) ([]ProjectState, error)
 		if err != nil {
 			return nil, err
 		}
-		project.RecentEvents, err = s.ListProjectEvents(ctx, project.Repo, defaultProjectEventsRetain)
+		project.RecentEvents, err = s.ListProjectEvents(ctx, project.Repo, 5)
+		if err != nil {
+			return nil, err
+		}
+		project.ConfiguredEvents, err = s.ListConfiguredEvents(ctx, project.Repo)
 		if err != nil {
 			return nil, err
 		}
@@ -302,11 +401,75 @@ func (s *ProjectStore) GetProject(ctx context.Context, repo string) (*ProjectSta
 	if err != nil {
 		return nil, err
 	}
-	project.RecentEvents, err = s.ListProjectEvents(ctx, repo, defaultProjectEventsRetain)
+	project.RecentEvents, err = s.ListProjectEvents(ctx, repo, 5)
+	if err != nil {
+		return nil, err
+	}
+	project.ConfiguredEvents, err = s.ListConfiguredEvents(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
 	return &project, nil
+}
+
+func (s *ProjectStore) UpdateConfiguredEvent(ctx context.Context, repo string, event protocol.EventMsg, hookName, state, output, desc string) {
+	if s == nil {
+		return
+	}
+	keys := configuredEventKeys(event, hookName)
+	if len(keys) == 0 {
+		return
+	}
+	now := time.Now()
+	for _, key := range keys {
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE configured_events
+			SET delivery_id = ?,
+				state = ?,
+				latest_output = ?,
+				description = ?,
+				ref = ?,
+				started_at = ?,
+				finished_at = ?,
+				updated_at = ?,
+				duration_ms = ?
+			WHERE repo = ? AND event_key = ?
+		`, event.DeliveryID, state, output, desc, event.Ref, now, now, now, 0, repo, key)
+		if err != nil {
+			logStateError(err, "update configured event")
+			return
+		}
+		if rows, _ := res.RowsAffected(); rows > 0 {
+			return
+		}
+	}
+}
+
+func (s *ProjectStore) ListConfiguredEvents(ctx context.Context, repo string) ([]ConfiguredEvent, error) {
+	if s == nil {
+		return []ConfiguredEvent{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT repo, event_key, source, hook, event, action, delivery_id, state,
+			latest_output, description, ref, hash, started_at, finished_at, updated_at, duration_ms
+		FROM configured_events
+		WHERE repo = ?
+		ORDER BY event_key
+	`, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []ConfiguredEvent
+	for rows.Next() {
+		event, err := scanConfiguredEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func (s *ProjectStore) RecordProjectEvent(ctx context.Context, event ExecutionEvent) {
@@ -336,7 +499,7 @@ func (s *ProjectStore) RecordProjectEvent(ctx context.Context, event ExecutionEv
 		logStateError(err, "record project event")
 		return
 	}
-	s.PruneProjectEvents(ctx, event.Repo, defaultProjectEventsRetain)
+	s.PruneProjectEvents(ctx, event.Repo, 5)
 }
 
 func (s *ProjectStore) ListProjectEvents(ctx context.Context, repo string, limit int) ([]ProjectEvent, error) {
@@ -344,7 +507,7 @@ func (s *ProjectStore) ListProjectEvents(ctx context.Context, repo string, limit
 		return []ProjectEvent{}, nil
 	}
 	if limit <= 0 {
-		limit = defaultProjectEventsRetain
+		limit = 5
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -376,7 +539,7 @@ func (s *ProjectStore) PruneProjectEvents(ctx context.Context, repo string, reta
 		return
 	}
 	if retain <= 0 {
-		retain = defaultProjectEventsRetain
+		retain = 5
 	}
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM project_events
@@ -429,6 +592,26 @@ func (s *ProjectStore) migrate(ctx context.Context) error {
 			PRIMARY KEY (repo, delivery_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_project_events_repo_updated_at ON project_events(repo, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS configured_events (
+			repo TEXT NOT NULL,
+			event_key TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			hook TEXT NOT NULL DEFAULT '',
+			event TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			delivery_id TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT 'no_runs',
+			latest_output TEXT NOT NULL DEFAULT '',
+			description TEXT NOT NULL DEFAULT '',
+			ref TEXT NOT NULL DEFAULT '',
+			hash TEXT NOT NULL DEFAULT '',
+			started_at DATETIME,
+			finished_at DATETIME,
+			updated_at DATETIME NOT NULL,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (repo, event_key)
+		);
+		CREATE INDEX IF NOT EXISTS idx_configured_events_repo ON configured_events(repo, event_key);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate state db: %w", err)
@@ -494,6 +677,40 @@ func scanProjectEvent(scanner projectScanner) (ProjectEvent, error) {
 	return event, nil
 }
 
+func scanConfiguredEvent(scanner projectScanner) (ConfiguredEvent, error) {
+	var event ConfiguredEvent
+	var startedAt sql.NullTime
+	var finishedAt sql.NullTime
+	err := scanner.Scan(
+		&event.Repo,
+		&event.EventKey,
+		&event.Source,
+		&event.Hook,
+		&event.Event,
+		&event.Action,
+		&event.DeliveryID,
+		&event.State,
+		&event.LatestOutput,
+		&event.Description,
+		&event.Ref,
+		&event.Hash,
+		&startedAt,
+		&finishedAt,
+		&event.UpdatedAt,
+		&event.DurationMillis,
+	)
+	if err != nil {
+		return ConfiguredEvent{}, err
+	}
+	if startedAt.Valid {
+		event.StartedAt = &startedAt.Time
+	}
+	if finishedAt.Valid {
+		event.FinishedAt = &finishedAt.Time
+	}
+	return event, nil
+}
+
 func latestEventOutput(event ExecutionEvent) string {
 	for i := len(event.Hooks) - 1; i >= 0; i-- {
 		if event.Hooks[i].Output != "" {
@@ -501,6 +718,111 @@ func latestEventOutput(event ExecutionEvent) string {
 		}
 	}
 	return ""
+}
+
+func configuredEventsForRepo(repo, repoPath string, cfg Config) []ConfiguredEvent {
+	var events []ConfiguredEvent
+	add := func(source, rawKey, hook string) {
+		eventName, action := splitConfiguredEventKey(rawKey)
+		key := configuredEventKey(rawKey, hook)
+		events = append(events, ConfiguredEvent{
+			Repo:     repo,
+			EventKey: key,
+			Source:   source,
+			Hook:     hook,
+			Event:    eventName,
+			Action:   action,
+			State:    "no_runs",
+		})
+	}
+
+	if cfg.GlobalHooks.Pre != "" {
+		add("client-global", "global", "pre")
+	}
+	if cfg.GlobalHooks.Post != "" {
+		add("client-global", "global", "post")
+	}
+	if cfg.GlobalHooks.Notify != "" {
+		add("client-global", "global", "notify")
+	}
+
+	if repoPath == "" {
+		return events
+	}
+
+	configPath := filepath.Join(repoPath, ".eventic.yaml")
+	if data, err := os.ReadFile(configPath); err == nil {
+		var repoCfg EventicConfig
+		if err := yaml.Unmarshal(data, &repoCfg); err == nil {
+			if repoCfg.Hooks.Pre != "" {
+				add(".eventic.yaml", "global", "pre")
+			}
+			if repoCfg.Hooks.Post != "" {
+				add(".eventic.yaml", "global", "post")
+			}
+			if repoCfg.Hooks.Notify != "" {
+				add(".eventic.yaml", "global", "notify")
+			}
+			for rawKey, hooks := range repoCfg.Events {
+				if hooks.Pre != "" {
+					add(".eventic.yaml", rawKey, "pre")
+				}
+				if hooks.Post != "" {
+					add(".eventic.yaml", rawKey, "post")
+				}
+				if hooks.Notify != "" {
+					add(".eventic.yaml", rawKey, "notify")
+				}
+			}
+		}
+	}
+
+	deployPath := filepath.Join(repoPath, ".deploy", "deploy.yml")
+	if _, err := os.Stat(deployPath); err == nil {
+		add(".deploy/deploy.yml", "push", "post")
+	}
+
+	return events
+}
+
+func configuredEventKeys(event protocol.EventMsg, hookName string) []string {
+	var hook string
+	switch hookName {
+	case "global:pre":
+		return []string{"global:pre"}
+	case "global:post":
+		return []string{"global:post"}
+	case "global:summary":
+		return []string{"global:notify"}
+	case "event:pre":
+		hook = "pre"
+	case "event:post":
+		hook = "post"
+	default:
+		return nil
+	}
+
+	keys := []string{}
+	if event.Action != "" {
+		keys = append(keys, configuredEventKey(event.GitHubEvent+"."+event.Action, hook))
+	}
+	keys = append(keys, configuredEventKey(event.GitHubEvent, hook))
+	return keys
+}
+
+func configuredEventKey(rawKey, hook string) string {
+	return rawKey + ":" + hook
+}
+
+func splitConfiguredEventKey(rawKey string) (string, string) {
+	if rawKey == "global" {
+		return "", ""
+	}
+	parts := strings.SplitN(rawKey, ".", 2)
+	if len(parts) == 1 {
+		return rawKey, ""
+	}
+	return parts[0], parts[1]
 }
 
 func isNotFound(err error) bool {

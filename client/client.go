@@ -60,8 +60,14 @@ func Run(ctx context.Context, cfg Config) {
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to open project state database")
 	}
+	if projectStore == nil && cfg.Web.Enabled {
+		projectStore, err = OpenMemoryProjectStore(ctx)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to open in-memory project state database")
+		}
+	}
 	defer projectStore.Close()
-	projectStore.SeedFromReposDir(ctx, cfg.ReposDir)
+	projectStore.SeedFromReposDir(ctx, cfg.ReposDir, cfg)
 	if cfg.Web.Enabled {
 		go func() {
 			if err := StartWebConsole(ctx, cfg.Web, webLog, projectStore); err != nil {
@@ -231,6 +237,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 	desc := ""
 	startedEvent := webLog.StartEvent(event)
 	projectStore.StartProject(ctx, startedEvent)
+	projectStore.SyncConfiguredEvents(ctx, event.Repo, "", cfg)
 	defer func() {
 		if finishedEvent := webLog.FinishEvent(event.DeliveryID, state, desc); finishedEvent != nil {
 			projectStore.FinishProject(ctx, *finishedEvent)
@@ -251,7 +258,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			fmt.Sprintf("Blocked event from unapproved source. To approve, run:\n`eventic-client approve --repo %s` or `eventic-client approve --sender %s`", event.Repo, event.Sender),
 			"", "failure", nil, event)
 		webLog.AddHook(event.DeliveryID, "approval:required", "failure", "")
-		projectStore.UpdateOutput(ctx, event.Repo, "failure", "")
+		projectStore.UpdateOutput(ctx, event.Repo, event, "approval:required", "failure", "")
 
 		status, _ := json.Marshal(protocol.StatusMsg{
 			MsgType:     "Status",
@@ -269,6 +276,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		desc = err.Error()
 		log.Error().Err(err).Str("repo", event.Repo).Msg("repo sync failed")
 	} else {
+		projectStore.SyncConfiguredEvents(ctx, event.Repo, repoPath, cfg)
 		hooks := DiscoverHooks(repoPath, event, cfg.GlobalHooks.Pre, cfg.GlobalHooks.Post, cfg.GlobalHooks.Notify, cfg.GlobalHooks.NotifyOn)
 
 		// Apply default notification template as fallback for global notify.
@@ -300,11 +308,11 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				desc = err.Error()
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "global:pre", "failure", out)
-				projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
+				projectStore.UpdateOutput(ctx, event.Repo, event, "global:pre", "failure", out)
 			} else {
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "global:pre", "success", out)
-				projectStore.UpdateOutput(ctx, event.Repo, "success", out)
+				projectStore.UpdateOutput(ctx, event.Repo, event, "global:pre", "success", out)
 			}
 		} else if hooks.Pre != "" {
 			log.Debug().Str("event", eventLabel(event)).Msg("skipping global pre hook (filtered)")
@@ -319,11 +327,11 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				desc = err.Error()
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "event:pre", "failure", out)
-				projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
+				projectStore.UpdateOutput(ctx, event.Repo, event, "event:pre", "failure", out)
 			} else {
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "event:pre", "success", out)
-				projectStore.UpdateOutput(ctx, event.Repo, "success", out)
+				projectStore.UpdateOutput(ctx, event.Repo, event, "event:pre", "success", out)
 			}
 		}
 
@@ -352,12 +360,12 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 					eventPostState = "failure"
 					eventPostOut = out
 					webLog.FinishHook(event.DeliveryID, "event:post", "failure", out)
-					projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
+					projectStore.UpdateOutput(ctx, event.Repo, event, "event:post", "failure", out)
 				} else {
 					desc = out
 					eventPostOut = out
 					webLog.FinishHook(event.DeliveryID, "event:post", "success", out)
-					projectStore.UpdateOutput(ctx, event.Repo, "success", out)
+					projectStore.UpdateOutput(ctx, event.Repo, event, "event:post", "success", out)
 				}
 			}
 
@@ -378,16 +386,16 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 					}
 					lastOut = out
 					webLog.FinishHook(event.DeliveryID, "global:post", "failure", out)
-					projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
+					projectStore.UpdateOutput(ctx, event.Repo, event, "global:post", "failure", out)
 				} else if desc == "" {
 					desc = out
 					lastOut = out
 					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
-					projectStore.UpdateOutput(ctx, event.Repo, "success", out)
+					projectStore.UpdateOutput(ctx, event.Repo, event, "global:post", "success", out)
 				} else {
 					lastOut = out
 					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
-					projectStore.UpdateOutput(ctx, event.Repo, "success", out)
+					projectStore.UpdateOutput(ctx, event.Repo, event, "global:post", "success", out)
 				}
 			} else if hooks.Post != "" {
 				log.Debug().Str("event", eventLabel(event)).Msg("skipping global post hook (filtered)")

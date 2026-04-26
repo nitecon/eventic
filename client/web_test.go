@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +97,14 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	}
 	store.StartProject(ctx, event)
 	store.UpdateGitState(ctx, "nitecon/eventic", "main", "abc123")
-	store.UpdateOutput(ctx, "nitecon/eventic", "success", "build ok")
+	var cfg Config
+	cfg.GlobalHooks.Post = "echo ok"
+	store.SyncConfiguredEvents(ctx, "nitecon/eventic", "", cfg)
+	store.UpdateOutput(ctx, "nitecon/eventic", protocol.EventMsg{
+		DeliveryID:  "delivery-1",
+		GitHubEvent: "push",
+		Repo:        "nitecon/eventic",
+	}, "global:post", "success", "build ok")
 
 	req := httptest.NewRequest(http.MethodGet, "/projects/nitecon/eventic", nil)
 	rec := httptest.NewRecorder()
@@ -118,11 +128,14 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	if project.LatestOutput != "build ok" {
 		t.Fatalf("unexpected latest output: %q", project.LatestOutput)
 	}
-	if len(project.RecentEvents) != 1 {
-		t.Fatalf("expected 1 recent event, got %d", len(project.RecentEvents))
+	if len(project.ConfiguredEvents) != 1 {
+		t.Fatalf("expected 1 configured event, got %d", len(project.ConfiguredEvents))
 	}
-	if project.RecentEvents[0].LatestOutput != "build ok" {
-		t.Fatalf("unexpected recent event output: %q", project.RecentEvents[0].LatestOutput)
+	if project.ConfiguredEvents[0].EventKey != "global:post" {
+		t.Fatalf("unexpected configured event key: %q", project.ConfiguredEvents[0].EventKey)
+	}
+	if project.ConfiguredEvents[0].LatestOutput != "build ok" {
+		t.Fatalf("unexpected configured event output: %q", project.ConfiguredEvents[0].LatestOutput)
 	}
 }
 
@@ -171,6 +184,76 @@ func TestProjectStoreRetainsLastFiveEventsPerRepo(t *testing.T) {
 	}
 }
 
+func TestSeedFromReposDirAddsDiskReposAndConfiguredEvents(t *testing.T) {
+	ctx := t.Context()
+	reposDir := t.TempDir()
+	repoPath := filepath.Join(reposDir, "nitecon", "eventic")
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	writeFile(t, filepath.Join(repoPath, "README.md"), "# test\n")
+	writeFile(t, filepath.Join(repoPath, ".eventic.yaml"), `
+hooks:
+  pre: "echo repo pre"
+events:
+  push:
+    post: "echo push post"
+`)
+	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.email", "eventic@example.com")
+	runGit(t, repoPath, "config", "user.name", "Eventic Test")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "init")
+
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	var cfg Config
+	cfg.GlobalHooks.Post = "echo global post"
+	store.SeedFromReposDir(ctx, reposDir, cfg)
+
+	project, err := store.GetProject(ctx, "nitecon/eventic")
+	if err != nil {
+		t.Fatalf("get seeded project: %v", err)
+	}
+	if project.Hash == "" {
+		t.Fatal("expected seeded project hash")
+	}
+
+	keys := map[string]bool{}
+	for _, event := range project.ConfiguredEvents {
+		keys[event.EventKey] = true
+	}
+	for _, key := range []string{"global:post", "global:pre", "push:post"} {
+		if !keys[key] {
+			t.Fatalf("expected configured event %q in %#v", key, project.ConfiguredEvents)
+		}
+	}
+}
+
 func testTime() time.Time {
 	return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC)
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
 }
