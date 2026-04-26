@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,6 +117,57 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	}
 	if project.LatestOutput != "build ok" {
 		t.Fatalf("unexpected latest output: %q", project.LatestOutput)
+	}
+	if len(project.RecentEvents) != 1 {
+		t.Fatalf("expected 1 recent event, got %d", len(project.RecentEvents))
+	}
+	if project.RecentEvents[0].LatestOutput != "build ok" {
+		t.Fatalf("unexpected recent event output: %q", project.RecentEvents[0].LatestOutput)
+	}
+}
+
+func TestProjectStoreRetainsLastFiveEventsPerRepo(t *testing.T) {
+	ctx := t.Context()
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	for i := 0; i < 7; i++ {
+		event := ExecutionEvent{
+			DeliveryID:  fmt.Sprintf("delivery-%d", i),
+			Repo:        "nitecon/eventic",
+			Event:       "push",
+			State:       "success",
+			Description: "ok",
+			StartedAt:   testTime().Add(time.Duration(i) * time.Minute),
+			UpdatedAt:   testTime().Add(time.Duration(i) * time.Minute),
+			Hooks: []HookExecution{{
+				Name:   "global:post",
+				State:  "success",
+				Output: fmt.Sprintf("output-%d", i),
+			}},
+		}
+		store.StartProject(ctx, event)
+		store.FinishProject(ctx, event)
+	}
+
+	events, err := store.ListProjectEvents(ctx, "nitecon/eventic", 10)
+	if err != nil {
+		t.Fatalf("list project events: %v", err)
+	}
+	if len(events) != 5 {
+		t.Fatalf("expected 5 retained events, got %d", len(events))
+	}
+	if events[0].DeliveryID != "delivery-6" {
+		t.Fatalf("expected newest event first, got %q", events[0].DeliveryID)
+	}
+	if events[4].DeliveryID != "delivery-2" {
+		t.Fatalf("expected oldest retained event delivery-2, got %q", events[4].DeliveryID)
 	}
 }
 

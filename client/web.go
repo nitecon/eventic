@@ -554,6 +554,24 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       margin: 12px 0;
       overflow: hidden;
     }
+    .history-event {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      margin: 12px 0 16px;
+      overflow: hidden;
+    }
+    .history-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .history-body {
+      padding: 0 12px 12px;
+    }
     .hook-title {
       display: flex;
       align-items: center;
@@ -597,15 +615,16 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
   </header>
   <main>
     <section class="events" id="events">
-      <div class="empty">No events yet.</div>
+      <div class="empty">No projects yet.</div>
     </section>
     <section class="detail" id="detail">
-      <div class="empty">Select an event to inspect hook output.</div>
+      <div class="empty">Select a project to inspect recent events.</div>
     </section>
   </main>
   <script>
-    const events = new Map();
-    let selected = "";
+    const repos = new Map();
+    const repoLimit = 50;
+    let selectedRepo = "";
     const listEl = document.getElementById("events");
     const detailEl = document.getElementById("detail");
     const connectionEl = document.getElementById("connection");
@@ -626,44 +645,43 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     }
 
     function upsert(event) {
-      events.set(event.delivery_id, event);
-      if (!selected) selected = event.delivery_id;
+      let bucket = repos.get(event.repo);
+      if (!bucket) {
+        bucket = { repo: event.repo, events: new Map(), latest: event };
+        repos.set(event.repo, bucket);
+      }
+      bucket.events.set(event.delivery_id, event);
+      bucket.latest = latestOf([...bucket.events.values()]);
+      const sorted = sortedEvents(bucket);
+      while (sorted.length > repoLimit) {
+        bucket.events.delete(sorted.pop().delivery_id);
+      }
+      bucket.latest = latestOf([...bucket.events.values()]);
+      if (!selectedRepo) selectedRepo = event.repo;
       render();
     }
 
-    function sortedEvents() {
-      return [...events.values()].sort((a, b) =>
+    function latestOf(events) {
+      return events.sort((a, b) =>
+        new Date(b.updated_at || b.started_at).getTime() - new Date(a.updated_at || a.started_at).getTime()
+      )[0];
+    }
+
+    function sortedEvents(bucket) {
+      return [...bucket.events.values()].sort((a, b) =>
         new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
       );
     }
 
-    function render() {
-      const rows = sortedEvents();
-      if (rows.length === 0) {
-        listEl.innerHTML = '<div class="empty">No events yet.</div>';
-        detailEl.innerHTML = '<div class="empty">Select an event to inspect hook output.</div>';
-        return;
-      }
-      listEl.innerHTML = rows.map(event =>
-        '<button class="event" type="button" data-id="' + escapeHTML(event.delivery_id) + '" aria-selected="' + (event.delivery_id === selected) + '">' +
-          '<div class="event-head">' +
-            '<div class="repo">' + escapeHTML(event.repo) + '</div>' +
-            '<div class="pill ' + stateClass(event.state) + '">' + escapeHTML(event.state) + '</div>' +
-          '</div>' +
-          '<div class="meta">' + escapeHTML(event.event) + (event.action ? "." + escapeHTML(event.action) : "") + '</div>' +
-          '<div class="meta">' + escapeHTML(fmtDate(event.started_at)) + '</div>' +
-        '</button>'
-      ).join("");
-      listEl.querySelectorAll("button[data-id]").forEach(button => {
-        button.addEventListener("click", () => {
-          selected = button.dataset.id;
-          render();
-        });
-      });
+    function sortedRepos() {
+      return [...repos.values()].sort((a, b) =>
+        new Date((b.latest && (b.latest.updated_at || b.latest.started_at)) || 0).getTime() -
+        new Date((a.latest && (a.latest.updated_at || a.latest.started_at)) || 0).getTime()
+      );
+    }
 
-      const event = events.get(selected) || rows[0];
-      selected = event.delivery_id;
-      const hooks = event.hooks && event.hooks.length ? event.hooks.map(hook =>
+    function renderHooks(event) {
+      return event.hooks && event.hooks.length ? event.hooks.map(hook =>
         '<article class="hook">' +
           '<div class="hook-title">' +
             '<span>' + escapeHTML(hook.name) + '</span>' +
@@ -672,16 +690,61 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
           '<pre>' + escapeHTML(hook.output || "No output.") + '</pre>' +
         '</article>'
       ).join("") : '<div class="empty">No hooks recorded for this event.</div>';
+    }
+
+    function render() {
+      const rows = sortedRepos();
+      if (rows.length === 0) {
+        listEl.innerHTML = '<div class="empty">No projects yet.</div>';
+        detailEl.innerHTML = '<div class="empty">Select a project to inspect recent events.</div>';
+        return;
+      }
+      listEl.innerHTML = rows.map(bucket => {
+        const latest = bucket.latest;
+        return '<button class="event" type="button" data-repo="' + escapeHTML(bucket.repo) + '" aria-selected="' + (bucket.repo === selectedRepo) + '">' +
+          '<div class="event-head">' +
+            '<div class="repo">' + escapeHTML(bucket.repo) + '</div>' +
+            '<div class="pill ' + stateClass(latest.state) + '">' + escapeHTML(latest.state) + '</div>' +
+          '</div>' +
+          '<div class="meta">' + escapeHTML(latest.event) + (latest.action ? "." + escapeHTML(latest.action) : "") + '</div>' +
+          '<div class="meta">' + bucket.events.size + ' recent event' + (bucket.events.size === 1 ? '' : 's') + '</div>' +
+        '</button>';
+      }).join("");
+      listEl.querySelectorAll("button[data-repo]").forEach(button => {
+        button.addEventListener("click", () => {
+          selectedRepo = button.dataset.repo;
+          render();
+        });
+      });
+
+      const bucket = repos.get(selectedRepo) || rows[0];
+      selectedRepo = bucket.repo;
+      const latest = bucket.latest;
+      const history = sortedEvents(bucket);
       detailEl.innerHTML =
-        '<h2>' + escapeHTML(event.repo) + '</h2>' +
+        '<h2>' + escapeHTML(bucket.repo) + '</h2>' +
         '<div class="toolbar">' +
-          '<span>' + escapeHTML(event.event) + (event.action ? "." + escapeHTML(event.action) : "") + '</span>' +
-          '<span>' + (event.duration_ms ? escapeHTML(event.duration_ms + " ms") : "running") + '</span>' +
+          '<span>' + history.length + ' recent event' + (history.length === 1 ? '' : 's') + '</span>' +
+          '<span class="pill ' + stateClass(latest.state) + '">' + escapeHTML(latest.state) + '</span>' +
         '</div>' +
-        '<div class="meta">Delivery: ' + escapeHTML(event.delivery_id) + '</div>' +
-        (event.ref ? '<div class="meta">Ref: ' + escapeHTML(event.ref) + '</div>' : "") +
-        (event.description ? '<div class="meta">Description: ' + escapeHTML(event.description) + '</div>' : "") +
-        hooks;
+        history.map(event =>
+          '<article class="history-event">' +
+            '<div class="history-title">' +
+              '<div>' +
+                '<div class="repo">' + escapeHTML(event.event) + (event.action ? "." + escapeHTML(event.action) : "") + '</div>' +
+                '<div class="meta">' + escapeHTML(fmtDate(event.started_at)) + '</div>' +
+              '</div>' +
+              '<span class="pill ' + stateClass(event.state) + '">' + escapeHTML(event.state) + '</span>' +
+            '</div>' +
+            '<div class="history-body">' +
+              '<div class="meta">Delivery: ' + escapeHTML(event.delivery_id) + '</div>' +
+              (event.ref ? '<div class="meta">Ref: ' + escapeHTML(event.ref) + '</div>' : "") +
+              (event.duration_ms ? '<div class="meta">Duration: ' + escapeHTML(event.duration_ms + " ms") + '</div>' : "") +
+              (event.description ? '<div class="meta">Description: ' + escapeHTML(event.description) + '</div>' : "") +
+              renderHooks(event) +
+            '</div>' +
+          '</article>'
+        ).join("");
     }
 
     fetch("/events").then(resp => resp.json()).then(data => {

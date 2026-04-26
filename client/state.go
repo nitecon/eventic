@@ -14,7 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const defaultStateDBPath = "/opt/eventic/state/eventic.db"
+const (
+	defaultStateDBPath         = "/opt/eventic/state/eventic.db"
+	defaultProjectEventsRetain = 5
+)
 
 // StateConfig controls the client-local persistent project database.
 type StateConfig struct {
@@ -24,12 +27,30 @@ type StateConfig struct {
 
 // ProjectState is the persisted latest state for a managed repository.
 type ProjectState struct {
+	Repo           string         `json:"repo"`
+	Ref            string         `json:"ref,omitempty"`
+	Hash           string         `json:"hash,omitempty"`
+	Event          string         `json:"event,omitempty"`
+	Action         string         `json:"action,omitempty"`
+	DeliveryID     string         `json:"delivery_id,omitempty"`
+	State          string         `json:"state"`
+	LatestOutput   string         `json:"latest_output,omitempty"`
+	Description    string         `json:"description,omitempty"`
+	StartedAt      time.Time      `json:"started_at"`
+	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DurationMillis int64          `json:"duration_ms,omitempty"`
+	RecentEvents   []ProjectEvent `json:"recent_events,omitempty"`
+}
+
+// ProjectEvent is a bounded persisted execution history item for one repo.
+type ProjectEvent struct {
 	Repo           string     `json:"repo"`
+	DeliveryID     string     `json:"delivery_id"`
 	Ref            string     `json:"ref,omitempty"`
 	Hash           string     `json:"hash,omitempty"`
 	Event          string     `json:"event,omitempty"`
 	Action         string     `json:"action,omitempty"`
-	DeliveryID     string     `json:"delivery_id,omitempty"`
 	State          string     `json:"state"`
 	LatestOutput   string     `json:"latest_output,omitempty"`
 	Description    string     `json:"description,omitempty"`
@@ -159,6 +180,7 @@ func (s *ProjectStore) StartProject(ctx context.Context, event ExecutionEvent) {
 	if err != nil {
 		logStateError(err, "start project state")
 	}
+	s.RecordProjectEvent(ctx, event)
 }
 
 func (s *ProjectStore) UpdateGitState(ctx context.Context, repo, ref, hash string) {
@@ -175,6 +197,17 @@ func (s *ProjectStore) UpdateGitState(ctx context.Context, repo, ref, hash strin
 	if err != nil {
 		logStateError(err, "update git state")
 	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE project_events
+		SET ref = COALESCE(NULLIF(?, ''), ref),
+			hash = ?,
+			updated_at = ?
+		WHERE repo = ?
+			AND delivery_id = (SELECT delivery_id FROM projects WHERE repo = ?)
+	`, ref, hash, time.Now(), repo, repo)
+	if err != nil {
+		logStateError(err, "update project event git state")
+	}
 }
 
 func (s *ProjectStore) UpdateOutput(ctx context.Context, repo, state, output string) {
@@ -190,6 +223,17 @@ func (s *ProjectStore) UpdateOutput(ctx context.Context, repo, state, output str
 	`, state, output, time.Now(), repo)
 	if err != nil {
 		logStateError(err, "update project output")
+	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE project_events
+		SET state = ?,
+			latest_output = ?,
+			updated_at = ?
+		WHERE repo = ?
+			AND delivery_id = (SELECT delivery_id FROM projects WHERE repo = ?)
+	`, state, output, time.Now(), repo, repo)
+	if err != nil {
+		logStateError(err, "update project event output")
 	}
 }
 
@@ -209,6 +253,7 @@ func (s *ProjectStore) FinishProject(ctx context.Context, event ExecutionEvent) 
 	if err != nil {
 		logStateError(err, "finish project state")
 	}
+	s.RecordProjectEvent(ctx, event)
 }
 
 func (s *ProjectStore) ListProjects(ctx context.Context) ([]ProjectState, error) {
@@ -233,6 +278,10 @@ func (s *ProjectStore) ListProjects(ctx context.Context) ([]ProjectState, error)
 		if err != nil {
 			return nil, err
 		}
+		project.RecentEvents, err = s.ListProjectEvents(ctx, project.Repo, defaultProjectEventsRetain)
+		if err != nil {
+			return nil, err
+		}
 		projects = append(projects, project)
 	}
 	return projects, rows.Err()
@@ -253,7 +302,96 @@ func (s *ProjectStore) GetProject(ctx context.Context, repo string) (*ProjectSta
 	if err != nil {
 		return nil, err
 	}
+	project.RecentEvents, err = s.ListProjectEvents(ctx, repo, defaultProjectEventsRetain)
+	if err != nil {
+		return nil, err
+	}
 	return &project, nil
+}
+
+func (s *ProjectStore) RecordProjectEvent(ctx context.Context, event ExecutionEvent) {
+	if s == nil {
+		return
+	}
+	output := latestEventOutput(event)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO project_events (
+			repo, delivery_id, ref, event, action, state,
+			latest_output, description, started_at, finished_at, updated_at, duration_ms
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(repo, delivery_id) DO UPDATE SET
+			ref = excluded.ref,
+			event = excluded.event,
+			action = excluded.action,
+			state = excluded.state,
+			latest_output = excluded.latest_output,
+			description = excluded.description,
+			started_at = excluded.started_at,
+			finished_at = excluded.finished_at,
+			updated_at = excluded.updated_at,
+			duration_ms = excluded.duration_ms
+	`, event.Repo, event.DeliveryID, event.Ref, event.Event, event.Action, event.State, output, event.Description, event.StartedAt, event.FinishedAt, event.UpdatedAt, event.DurationMillis)
+	if err != nil {
+		logStateError(err, "record project event")
+		return
+	}
+	s.PruneProjectEvents(ctx, event.Repo, defaultProjectEventsRetain)
+}
+
+func (s *ProjectStore) ListProjectEvents(ctx context.Context, repo string, limit int) ([]ProjectEvent, error) {
+	if s == nil {
+		return []ProjectEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = defaultProjectEventsRetain
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT repo, delivery_id, ref, hash, event, action, state,
+			latest_output, description, started_at, finished_at, updated_at, duration_ms
+		FROM project_events
+		WHERE repo = ?
+		ORDER BY updated_at DESC
+		LIMIT ?
+	`, repo, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []ProjectEvent
+	for rows.Next() {
+		event, err := scanProjectEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *ProjectStore) PruneProjectEvents(ctx context.Context, repo string, retain int) {
+	if s == nil {
+		return
+	}
+	if retain <= 0 {
+		retain = defaultProjectEventsRetain
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM project_events
+		WHERE repo = ?
+			AND delivery_id NOT IN (
+				SELECT delivery_id
+				FROM project_events
+				WHERE repo = ?
+				ORDER BY updated_at DESC
+				LIMIT ?
+			)
+	`, repo, repo, retain)
+	if err != nil {
+		logStateError(err, "prune project events")
+	}
 }
 
 func (s *ProjectStore) migrate(ctx context.Context) error {
@@ -274,6 +412,23 @@ func (s *ProjectStore) migrate(ctx context.Context) error {
 			duration_ms INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);
+		CREATE TABLE IF NOT EXISTS project_events (
+			repo TEXT NOT NULL,
+			delivery_id TEXT NOT NULL,
+			ref TEXT NOT NULL DEFAULT '',
+			hash TEXT NOT NULL DEFAULT '',
+			event TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			latest_output TEXT NOT NULL DEFAULT '',
+			description TEXT NOT NULL DEFAULT '',
+			started_at DATETIME NOT NULL,
+			finished_at DATETIME,
+			updated_at DATETIME NOT NULL,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (repo, delivery_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_project_events_repo_updated_at ON project_events(repo, updated_at DESC);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate state db: %w", err)
@@ -310,6 +465,42 @@ func scanProject(scanner projectScanner) (ProjectState, error) {
 		project.FinishedAt = &finishedAt.Time
 	}
 	return project, nil
+}
+
+func scanProjectEvent(scanner projectScanner) (ProjectEvent, error) {
+	var event ProjectEvent
+	var finishedAt sql.NullTime
+	err := scanner.Scan(
+		&event.Repo,
+		&event.DeliveryID,
+		&event.Ref,
+		&event.Hash,
+		&event.Event,
+		&event.Action,
+		&event.State,
+		&event.LatestOutput,
+		&event.Description,
+		&event.StartedAt,
+		&finishedAt,
+		&event.UpdatedAt,
+		&event.DurationMillis,
+	)
+	if err != nil {
+		return ProjectEvent{}, err
+	}
+	if finishedAt.Valid {
+		event.FinishedAt = &finishedAt.Time
+	}
+	return event, nil
+}
+
+func latestEventOutput(event ExecutionEvent) string {
+	for i := len(event.Hooks) - 1; i >= 0; i-- {
+		if event.Hooks[i].Output != "" {
+			return event.Hooks[i].Output
+		}
+	}
+	return ""
 }
 
 func isNotFound(err error) bool {

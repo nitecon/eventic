@@ -239,7 +239,7 @@ subscribe:
 | `default-notify-on` | Default `notify_on` filter applied alongside `default-notify` (e.g., `[failure]`). Only used when `default-notify` is set |
 | `web.enabled` | Enables the client-local web console for recent event and hook output inspection. Defaults to `false` |
 | `web.listen` | Address for the local web console. Defaults to `127.0.0.1:16384` when enabled |
-| `web.max_events` | Number of recent client executions retained in memory. Defaults to `100` |
+| `web.max_events` | Number of recent client executions retained in memory for replay/API startup. Defaults to `100` |
 | `web.max_output_bytes` | Maximum retained output bytes per hook/description. Defaults to `65536` |
 | `state.enabled` | Enables the client-local SQLite project state database. Defaults to `false` |
 | `state.path` | SQLite database path for project state. Defaults to `/opt/eventic/state/eventic.db` when enabled |
@@ -272,16 +272,18 @@ state:
 
 When `web.enabled` is true, the client starts a local-only web console on `web.listen`. This runs on the Eventic client, not the public relay server, so hook output and internal build logs stay on the machine that executed them.
 
+The dashboard groups streamed events by repository. The left side shows one tab-like entry per `owner/repo`; selecting it shows that repository's recent event history. The browser keeps the last 50 streamed events per repository for the current page session.
+
 | Endpoint | Purpose |
 |---|---|
 | `/` | Human-readable dashboard for recent events and hook output |
 | `/events` | JSON array of recent executions, newest first |
 | `/events/stream` | Server-Sent Events stream for live execution updates |
 | `/projects` | JSON array of persisted project states from SQLite, newest first |
-| `/projects/owner/repo` | JSON object for a single persisted project state |
+| `/projects/owner/repo` | JSON object for a single persisted project state, including its persisted recent event history |
 | `/healthz` | Local health check |
 
-The SQLite database stores one row per managed repository in the `projects` table. Each row contains the repo name, latest GitHub event/action/delivery ID, final state, latest combined stdout/stderr output, latest description, checked-out git ref, checked-out commit hash, and timing fields.
+The SQLite database stores one current row per managed repository in the `projects` table. Each row contains the repo name, latest GitHub event/action/delivery ID, final state, latest combined stdout/stderr output, latest description, checked-out git ref, checked-out commit hash, and timing fields. SQLite also keeps the last 5 execution records per repository in `project_events`; older rows for that repository are pruned automatically.
 
 For Kubernetes clients, mount persistent storage at `/opt/eventic/state` or set `state.path` to a path inside your own volume mount:
 
