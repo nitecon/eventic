@@ -16,30 +16,31 @@ import (
 var repoLocks = NewRepoLocks()
 
 type Config struct {
-	Relay      string   `yaml:"relay"`
-	Token      string   `yaml:"token"`
-	ClientID   string   `yaml:"client_id"`
-	ReposDir   string   `yaml:"repos_dir"`
-	Subscribe  []string `yaml:"subscribe"`
-	AutoUpdate bool     `yaml:"auto-update"`
-	AutoCheck  *bool    `yaml:"auto-check"`
-	MaxWorkers int      `yaml:"max-workers"`
-	LogLevel   string   `yaml:"log-level"`
+	Relay       string   `yaml:"relay"`
+	Token       string   `yaml:"token"`
+	ClientID    string   `yaml:"client_id"`
+	ReposDir    string   `yaml:"repos_dir"`
+	Subscribe   []string `yaml:"subscribe"`
+	AutoUpdate  bool     `yaml:"auto-update"`
+	AutoCheck   *bool    `yaml:"auto-check"`
+	MaxWorkers  int      `yaml:"max-workers"`
+	LogLevel    string   `yaml:"log-level"`
 	GlobalHooks struct {
 		Pre      string   `yaml:"pre"`
 		Post     string   `yaml:"post"`
 		Notify   string   `yaml:"notify"`
 		NotifyOn []string `yaml:"notify_on"`
 	} `yaml:"global-hooks"`
-	GlobalIgnorePre    []string        `yaml:"global-ignore-pre"`
-	GlobalIgnorePost   []string        `yaml:"global-ignore-post"`
-	GlobalAllowedPre   []string        `yaml:"global-allowed-pre"`
-	GlobalAllowedPost  []string        `yaml:"global-allowed-post"`
-	DefaultNotify      string          `yaml:"default-notify"`
-	DefaultNotifyOn    []string        `yaml:"default-notify-on"`
-	Notifier           notifier.Config `yaml:"notifier"`
-	RequireApproval    bool            `yaml:"require_approval"`
-	ApprovalsPath      string          `yaml:"approvals_path"`
+	GlobalIgnorePre   []string        `yaml:"global-ignore-pre"`
+	GlobalIgnorePost  []string        `yaml:"global-ignore-post"`
+	GlobalAllowedPre  []string        `yaml:"global-allowed-pre"`
+	GlobalAllowedPost []string        `yaml:"global-allowed-post"`
+	DefaultNotify     string          `yaml:"default-notify"`
+	DefaultNotifyOn   []string        `yaml:"default-notify-on"`
+	Notifier          notifier.Config `yaml:"notifier"`
+	RequireApproval   bool            `yaml:"require_approval"`
+	ApprovalsPath     string          `yaml:"approvals_path"`
+	Web               WebConfig       `yaml:"web"`
 }
 
 // Run connects to the relay and processes events. Reconnects on failure.
@@ -53,6 +54,14 @@ func Run(ctx context.Context, cfg Config) {
 	}
 
 	n := notifier.NewNotifier(cfg.Notifier)
+	webLog := NewExecutionLog(cfg.Web)
+	if cfg.Web.Enabled {
+		go func() {
+			if err := StartWebConsole(ctx, cfg.Web, webLog); err != nil {
+				log.Error().Err(err).Msg("web console stopped")
+			}
+		}()
+	}
 
 	// Health-check all notifiers at startup.
 	if err := n.Ping(ctx); err != nil {
@@ -106,7 +115,7 @@ func Run(ctx context.Context, cfg Config) {
 		default:
 		}
 
-		err := connect(ctx, cfg, workerSem, dispatch, approvalStore)
+		err := connect(ctx, cfg, workerSem, dispatch, approvalStore, webLog)
 		if err != nil {
 			log.Error().Err(err).Dur("backoff", backoff).Msg("connection lost, reconnecting")
 		}
@@ -124,7 +133,7 @@ func Run(ctx context.Context, cfg Config) {
 	}
 }
 
-func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore) error {
+func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore, webLog *ExecutionLog) error {
 	conn, _, err := websocket.Dial(ctx, cfg.Relay, nil)
 	if err != nil {
 		return err
@@ -184,7 +193,7 @@ func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch 
 				log.Error().Err(err).Msg("failed to parse event")
 				continue
 			}
-			go processEvent(ctx, conn, cfg, event, workerSem, dispatch, approvalStore)
+			go processEvent(ctx, conn, cfg, event, workerSem, dispatch, approvalStore, webLog)
 
 		case "Ping":
 			pong, _ := json.Marshal(protocol.Envelope{MsgType: "Pong"})
@@ -193,7 +202,7 @@ func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch 
 	}
 }
 
-func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event protocol.EventMsg, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore) {
+func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event protocol.EventMsg, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore, webLog *ExecutionLog) {
 	// Acquire worker slot (bounded concurrency)
 	workerSem <- struct{}{}
 	defer func() { <-workerSem }()
@@ -213,6 +222,10 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 
 	state := "success"
 	desc := ""
+	webLog.StartEvent(event)
+	defer func() {
+		webLog.FinishEvent(event.DeliveryID, state, desc)
+	}()
 
 	// ── Approval Check ─────────────────────────────────────────────────────────
 	if approvalStore != nil && !approvalStore.IsApproved(event.Repo, event.Sender) {
@@ -227,6 +240,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		sendNotification(ctx, dispatch, "approval:required",
 			fmt.Sprintf("Blocked event from unapproved source. To approve, run:\n`eventic-client approve --repo %s` or `eventic-client approve --sender %s`", event.Repo, event.Sender),
 			"", "failure", nil, event)
+		webLog.AddHook(event.DeliveryID, "approval:required", "failure", "")
 
 		status, _ := json.Marshal(protocol.StatusMsg{
 			MsgType:     "Status",
@@ -269,12 +283,15 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		if hooks.Pre != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPre, cfg.GlobalIgnorePre) {
 			sendStartNotification(ctx, dispatch, "global:pre", event)
 			hooksExecuted = true
+			webLog.StartHook(event.DeliveryID, "global:pre")
 			if out, err := RunHookWithOutput(ctx, repoPath, hooks.Pre, "global:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
 				lastOut = out
+				webLog.FinishHook(event.DeliveryID, "global:pre", "failure", out)
 			} else {
 				lastOut = out
+				webLog.FinishHook(event.DeliveryID, "global:pre", "success", out)
 			}
 		} else if hooks.Pre != "" {
 			log.Debug().Str("event", eventLabel(event)).Msg("skipping global pre hook (filtered)")
@@ -283,12 +300,15 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		if hooks.EventPre != "" {
 			sendStartNotification(ctx, dispatch, "event:pre", event)
 			hooksExecuted = true
+			webLog.StartHook(event.DeliveryID, "event:pre")
 			if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPre, "event:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
 				lastOut = out
+				webLog.FinishHook(event.DeliveryID, "event:pre", "failure", out)
 			} else {
 				lastOut = out
+				webLog.FinishHook(event.DeliveryID, "event:pre", "success", out)
 			}
 		}
 
@@ -303,14 +323,17 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			if hooks.EventPost != "" {
 				sendStartNotification(ctx, dispatch, "event:post", event)
 				hooksExecuted = true
+				webLog.StartHook(event.DeliveryID, "event:post")
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPost, "event:post", event); err != nil {
 					state = "failure"
 					desc = err.Error()
 					eventPostState = "failure"
 					eventPostOut = out
+					webLog.FinishHook(event.DeliveryID, "event:post", "failure", out)
 				} else {
 					desc = out
 					eventPostOut = out
+					webLog.FinishHook(event.DeliveryID, "event:post", "success", out)
 				}
 			}
 
@@ -323,15 +346,21 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			if hooks.Post != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPost, cfg.GlobalIgnorePost) {
 				sendStartNotification(ctx, dispatch, "global:post", event)
 				hooksExecuted = true
+				webLog.StartHook(event.DeliveryID, "global:post")
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, "global:post", event); err != nil {
 					if state == "success" {
 						state = "failure"
 						desc = err.Error()
 					}
 					lastOut = out
+					webLog.FinishHook(event.DeliveryID, "global:post", "failure", out)
 				} else if desc == "" {
 					desc = out
 					lastOut = out
+					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
+				} else {
+					lastOut = out
+					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
 				}
 			} else if hooks.Post != "" {
 				log.Debug().Str("event", eventLabel(event)).Msg("skipping global post hook (filtered)")

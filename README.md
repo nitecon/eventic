@@ -198,6 +198,11 @@ global-ignore-post:
   - release.published
 default-notify: "Hook {{.State}} for {{.Repo}} ({{.Event}}.{{.Action}})"
 default-notify-on: [failure]
+web:
+  enabled: true
+  listen: "127.0.0.1:16384"
+  max_events: 100
+  max_output_bytes: 65536
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
   post: "claude -p 'Validate the repository at ${EVENTIC_REPOS}/${EVENTIC_REPO} and report any issues.'"
@@ -237,6 +242,21 @@ subscribe:
 | `global-allowed-post` | Allowlist of event patterns for global post hook — same behaviour as `global-allowed-pre` but for the post hook |
 | `default-notify` | Default notification template used as a fallback when global hooks have no `notify` field set (see [Notifications](#notifications)) |
 | `default-notify-on` | Default `notify_on` filter applied alongside `default-notify` (e.g., `[failure]`). Only used when `default-notify` is set |
+| `web.enabled` | Enables the client-local web console for recent event and hook output inspection. Defaults to `false` |
+| `web.listen` | Address for the local web console. Defaults to `127.0.0.1:16384` when enabled |
+| `web.max_events` | Number of recent client executions retained in memory. Defaults to `100` |
+| `web.max_output_bytes` | Maximum retained output bytes per hook/description. Defaults to `65536` |
+
+### Client Web Console
+
+When `web.enabled` is true, the client starts a local-only web console on `web.listen`. This runs on the Eventic client, not the public relay server, so hook output and internal build logs stay on the machine that executed them.
+
+| Endpoint | Purpose |
+|---|---|
+| `/` | Human-readable dashboard for recent events and hook output |
+| `/events` | JSON array of recent executions, newest first |
+| `/events/stream` | Server-Sent Events stream for live execution updates |
+| `/healthz` | Local health check |
 
 ### Subscription Patterns
 
