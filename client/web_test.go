@@ -92,6 +92,8 @@ func TestWebIndexIncludesActiveAndExistingProjectSections(t *testing.T) {
 		`id="active-projects"`,
 		`id="existing-projects"`,
 		`id="project-search"`,
+		"Event Queue",
+		`id="event-queue"`,
 		`fetch("/projects")`,
 		`function refreshSnapshot()`,
 	} {
@@ -153,6 +155,9 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	if project.LatestOutput != "build ok" {
 		t.Fatalf("unexpected latest output: %q", project.LatestOutput)
 	}
+	if len(project.RecentEvents) != 0 {
+		t.Fatalf("expected project detail to omit recent raw events, got %d", len(project.RecentEvents))
+	}
 	if len(project.ConfiguredEvents) != 1 {
 		t.Fatalf("expected 1 configured event, got %d", len(project.ConfiguredEvents))
 	}
@@ -177,6 +182,9 @@ func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
 
 	store.UpsertManagedProject(ctx, "nitecon/eventic", "main", "abc123")
 	store.UpsertManagedProject(ctx, "nitecon/another", "main", "def456")
+	var cfg Config
+	cfg.GlobalHooks.Post = "echo configured"
+	store.SyncConfiguredEvents(ctx, "nitecon/eventic", "", cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
 	rec := httptest.NewRecorder()

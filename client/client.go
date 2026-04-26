@@ -303,6 +303,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			sendStartNotification(ctx, dispatch, "global:pre", event)
 			hooksExecuted = true
 			webLog.StartHook(event.DeliveryID, "global:pre")
+			projectStore.StartConfiguredEvent(ctx, event.Repo, event, "global:pre")
 			if out, err := RunHookWithOutput(ctx, repoPath, hooks.Pre, "global:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
@@ -322,6 +323,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			sendStartNotification(ctx, dispatch, "event:pre", event)
 			hooksExecuted = true
 			webLog.StartHook(event.DeliveryID, "event:pre")
+			projectStore.StartConfiguredEvent(ctx, event.Repo, event, "event:pre")
 			if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPre, "event:pre", event); err != nil {
 				state = "failure"
 				desc = err.Error()
@@ -354,6 +356,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				sendStartNotification(ctx, dispatch, "event:post", event)
 				hooksExecuted = true
 				webLog.StartHook(event.DeliveryID, "event:post")
+				projectStore.StartConfiguredEvent(ctx, event.Repo, event, "event:post")
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPost, "event:post", event); err != nil {
 					state = "failure"
 					desc = err.Error()
@@ -379,6 +382,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				sendStartNotification(ctx, dispatch, "global:post", event)
 				hooksExecuted = true
 				webLog.StartHook(event.DeliveryID, "global:post")
+				projectStore.StartConfiguredEvent(ctx, event.Repo, event, "global:post")
 				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, "global:post", event); err != nil {
 					if state == "success" {
 						state = "failure"

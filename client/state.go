@@ -405,15 +405,43 @@ func (s *ProjectStore) GetProject(ctx context.Context, repo string) (*ProjectSta
 	if err != nil {
 		return nil, err
 	}
-	project.RecentEvents, err = s.ListProjectEvents(ctx, repo, 5)
-	if err != nil {
-		return nil, err
-	}
 	project.ConfiguredEvents, err = s.ListConfiguredEvents(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
 	return &project, nil
+}
+
+func (s *ProjectStore) StartConfiguredEvent(ctx context.Context, repo string, event protocol.EventMsg, hookName string) {
+	if s == nil {
+		return
+	}
+	keys := configuredEventKeys(event, hookName)
+	if len(keys) == 0 {
+		return
+	}
+	now := time.Now()
+	for _, key := range keys {
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE configured_events
+			SET delivery_id = ?,
+				state = 'running',
+				description = '',
+				ref = ?,
+				started_at = ?,
+				finished_at = NULL,
+				updated_at = ?,
+				duration_ms = 0
+			WHERE repo = ? AND event_key = ?
+		`, event.DeliveryID, event.Ref, now, now, repo, key)
+		if err != nil {
+			logStateError(err, "start configured event")
+			return
+		}
+		if rows, _ := res.RowsAffected(); rows > 0 {
+			return
+		}
+	}
 }
 
 func (s *ProjectStore) UpdateConfiguredEvent(ctx context.Context, repo string, event protocol.EventMsg, hookName, state, output, desc string) {

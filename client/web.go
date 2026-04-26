@@ -452,6 +452,9 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
     header {
       height: 56px;
@@ -474,13 +477,14 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     main {
       display: grid;
       grid-template-columns: minmax(320px, 440px) minmax(0, 1fr);
-      min-height: calc(100vh - 56px);
+      flex: 1 1 auto;
+      min-height: 0;
     }
     .sidebar {
       border-right: 1px solid var(--border);
       background: var(--panel);
       overflow: auto;
-      max-height: calc(100vh - 56px);
+      max-height: none;
       padding: 12px;
       display: flex;
       flex-direction: column;
@@ -535,7 +539,6 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     .existing-well .project-list {
       flex: 1 1 auto;
       min-height: 160px;
-      max-height: calc(100vh - 244px);
     }
     .event {
       width: 100%;
@@ -589,7 +592,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       min-width: 0;
       padding: 18px 20px;
       overflow: auto;
-      max-height: calc(100vh - 56px);
+      max-height: none;
     }
     .detail h2 {
       margin: 0 0 8px;
@@ -655,6 +658,38 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       color: var(--muted);
       padding: 24px;
     }
+    .event-footer {
+      flex: 0 0 190px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .footer-title {
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .event-queue {
+      overflow: auto;
+      padding: 8px 20px 14px;
+    }
+    .queue-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 1.2fr) minmax(110px, .7fr) minmax(100px, .55fr) minmax(170px, .9fr);
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .queue-row:last-child {
+      border-bottom: 0;
+    }
     @media (max-width: 760px) {
       main { grid-template-columns: 1fr; }
       .sidebar {
@@ -663,6 +698,8 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         border-bottom: 1px solid var(--border);
       }
       .detail { max-height: none; }
+      .event-footer { flex-basis: 220px; }
+      .queue-row { grid-template-columns: 1fr; gap: 4px; }
     }
   </style>
 </head>
@@ -690,21 +727,27 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       </section>
     </section>
     <section class="detail" id="detail">
-      <div class="empty">Select a project to inspect recent events.</div>
+      <div class="empty">Select a project to inspect configured outputs.</div>
     </section>
   </main>
+  <footer class="event-footer">
+    <div class="footer-title">Event Queue</div>
+    <div class="event-queue" id="event-queue">
+      <div class="empty">No events received yet.</div>
+    </div>
+  </footer>
   <script>
-    const activeRepos = new Map();
     const existingProjects = new Map();
-    const repoLimit = 50;
+    const eventQueue = new Map();
+    const eventQueueLimit = 100;
     let selectedRepo = "";
-    let selectedMode = "existing";
     let selectedProjectDetail = null;
     let projectRefreshTimer = null;
     let projectSearch = "";
     let lastOpenRefresh = 0;
     const activeEl = document.getElementById("active-projects");
     const existingEl = document.getElementById("existing-projects");
+    const eventQueueEl = document.getElementById("event-queue");
     const searchEl = document.getElementById("project-search");
     const detailEl = document.getElementById("detail");
     const connectionEl = document.getElementById("connection");
@@ -724,44 +767,19 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       }[ch]));
     }
 
-    function upsert(event) {
-      let bucket = activeRepos.get(event.repo);
-      if (!bucket) {
-        bucket = { repo: event.repo, events: new Map(), latest: event };
-        activeRepos.set(event.repo, bucket);
+    function eventTime(event) {
+      return new Date(event.updated_at || event.started_at || 0).getTime();
+    }
+
+    function upsertQueueEvent(event) {
+      if (!event || !event.delivery_id) return;
+      eventQueue.set(event.delivery_id, event);
+      const sorted = sortedQueueEvents();
+      while (sorted.length > eventQueueLimit) {
+        eventQueue.delete(sorted.pop().delivery_id);
       }
-      bucket.events.set(event.delivery_id, event);
-      bucket.latest = latestOf([...bucket.events.values()]);
-      const sorted = sortedEvents(bucket);
-      while (sorted.length > repoLimit) {
-        bucket.events.delete(sorted.pop().delivery_id);
-      }
-      bucket.latest = latestOf([...bucket.events.values()]);
-      if (!selectedRepo) {
-        selectedRepo = event.repo;
-        selectedMode = "active";
-      }
-      render();
+      renderEventQueue();
       scheduleProjectRefresh();
-    }
-
-    function latestOf(events) {
-      return events.sort((a, b) =>
-        new Date(b.updated_at || b.started_at).getTime() - new Date(a.updated_at || a.started_at).getTime()
-      )[0];
-    }
-
-    function sortedEvents(bucket) {
-      return [...bucket.events.values()].sort((a, b) =>
-        new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
-      );
-    }
-
-    function sortedActiveRepos() {
-      return [...activeRepos.values()].filter(bucket => bucket.latest && bucket.latest.state === "running").sort((a, b) =>
-        new Date((b.latest && (b.latest.updated_at || b.latest.started_at)) || 0).getTime() -
-        new Date((a.latest && (a.latest.updated_at || a.latest.started_at)) || 0).getTime()
-      );
     }
 
     function sortedExistingProjects() {
@@ -773,6 +791,29 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         new Date(a.updated_at || a.started_at || 0).getTime() ||
         a.repo.localeCompare(b.repo)
       );
+    }
+
+    function sortedQueueEvents() {
+      return [...eventQueue.values()].sort((a, b) => eventTime(b) - eventTime(a));
+    }
+
+    function configuredEvents(project) {
+      return project && Array.isArray(project.configured_events) ? project.configured_events : [];
+    }
+
+    function latestConfiguredEvent(project) {
+      const events = configuredEvents(project).filter(event => event.state && event.state !== "no_runs");
+      return events.sort((a, b) => eventTime(b) - eventTime(a))[0] || configuredEvents(project)[0] || null;
+    }
+
+    function sortedActiveConfiguredEvents() {
+      const rows = [];
+      existingProjects.forEach(project => {
+        configuredEvents(project).forEach(event => {
+          if (event.state === "running") rows.push({ project, event });
+        });
+      });
+      return rows.sort((a, b) => eventTime(b.event) - eventTime(a.event));
     }
 
     function eventLabel(event) {
@@ -811,98 +852,54 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     }
 
     function projectSummary(project) {
-      if (project.configured_events && project.configured_events.length) {
-        const completed = project.configured_events.filter(event => event.state && event.state !== "no_runs").length;
-        return completed + ' of ' + project.configured_events.length + ' configured output' + (project.configured_events.length === 1 ? '' : 's');
+      const events = configuredEvents(project);
+      if (events.length) {
+        const completed = events.filter(event => event.state && event.state !== "no_runs").length;
+        return completed + ' of ' + events.length + ' configured output' + (events.length === 1 ? '' : 's');
       }
-      if (!project.updated_at) return "not loaded";
-      return project.state && project.state !== "known" ? project.state : "no runs";
+      return project.loaded ? "no configured outputs" : "not loaded";
     }
 
     function render() {
-      const activeRows = sortedActiveRepos();
+      const activeRows = sortedActiveConfiguredEvents();
       const existingRows = sortedExistingProjects();
 
-      activeEl.innerHTML = activeRows.length ? activeRows.map(bucket => {
-        const latest = bucket.latest;
-        return '<button class="event" type="button" data-mode="active" data-repo="' + escapeHTML(bucket.repo) + '" aria-selected="' + (selectedMode === "active" && bucket.repo === selectedRepo) + '">' +
+      activeEl.innerHTML = activeRows.length ? activeRows.map(row =>
+        '<button class="event" type="button" data-repo="' + escapeHTML(row.project.repo) + '" aria-selected="' + (row.project.repo === selectedRepo) + '">' +
           '<div class="event-head">' +
-            '<div class="repo">' + escapeHTML(bucket.repo) + '</div>' +
-            '<div class="pill ' + stateClass(latest.state) + '">' + escapeHTML(latest.state) + '</div>' +
+            '<div class="repo">' + escapeHTML(row.project.repo) + '</div>' +
+            '<div class="pill running">running</div>' +
           '</div>' +
-          '<div class="meta">' + eventLabel(latest) + '</div>' +
-          '<div class="meta">' + bucket.events.size + ' recent event' + (bucket.events.size === 1 ? '' : 's') + '</div>' +
-        '</button>';
-      }).join("") : '<div class="empty">No active projects.</div>';
+          '<div class="meta">' + escapeHTML(row.event.event_key) + '</div>' +
+          '<div class="meta">' + escapeHTML(row.event.latest_output || row.event.description || "No output yet.") + '</div>' +
+        '</button>'
+      ).join("") : '<div class="empty">No active projects.</div>';
 
       existingEl.innerHTML = existingRows.length ? existingRows.map(project =>
-        '<button class="event" type="button" data-mode="existing" data-repo="' + escapeHTML(project.repo) + '" aria-selected="' + (selectedMode === "existing" && project.repo === selectedRepo) + '">' +
+        '<button class="event" type="button" data-repo="' + escapeHTML(project.repo) + '" aria-selected="' + (project.repo === selectedRepo) + '">' +
           '<div class="event-head">' +
             '<div class="repo">' + escapeHTML(project.repo) + '</div>' +
-            '<div class="pill ' + stateClass(project.state) + '">' + escapeHTML(project.state || "known") + '</div>' +
+            '<div class="pill ' + stateClass((latestConfiguredEvent(project) || {}).state) + '">' + escapeHTML((latestConfiguredEvent(project) || {}).state || "known") + '</div>' +
           '</div>' +
           '<div class="meta">' + escapeHTML(projectSummary(project)) + '</div>' +
-          (project.ref ? '<div class="meta">' + escapeHTML(project.ref) + '</div>' : "") +
+          (latestConfiguredEvent(project) ? '<div class="meta">' + escapeHTML(latestConfiguredEvent(project).event_key) + '</div>' : "") +
         '</button>'
       ).join("") : '<div class="empty">' + (projectSearch ? 'No matching projects.' : 'No projects yet.') + '</div>';
 
       document.querySelectorAll("button[data-repo]").forEach(button => {
         button.addEventListener("click", () => {
           selectedRepo = button.dataset.repo;
-          selectedMode = button.dataset.mode;
-          if (selectedMode === "existing") {
-            loadProjectDetail(selectedRepo);
-          }
+          loadProjectDetail(selectedRepo);
           render();
         });
       });
 
       if (!selectedRepo && existingRows.length) {
         selectedRepo = existingRows[0].repo;
-        selectedMode = "existing";
         loadProjectDetail(selectedRepo);
       }
 
-      if (selectedMode === "existing") {
-        renderProjectDetail();
-      } else {
-        renderActiveDetail(activeRows);
-      }
-    }
-
-    function renderActiveDetail(activeRows) {
-      const bucket = activeRepos.get(selectedRepo) || activeRows[0];
-      if (!bucket) {
-        detailEl.innerHTML = '<div class="empty">Select a project to inspect recent events.</div>';
-        return;
-      }
-      selectedRepo = bucket.repo;
-      const latest = bucket.latest;
-      const history = sortedEvents(bucket);
-      detailEl.innerHTML =
-        '<h2>' + escapeHTML(bucket.repo) + '</h2>' +
-        '<div class="toolbar">' +
-          '<span>' + history.length + ' recent event' + (history.length === 1 ? '' : 's') + '</span>' +
-          '<span class="pill ' + stateClass(latest.state) + '">' + escapeHTML(latest.state) + '</span>' +
-        '</div>' +
-        history.map(event =>
-          '<article class="history-event">' +
-            '<div class="history-title">' +
-              '<div>' +
-                '<div class="repo">' + eventLabel(event) + '</div>' +
-                '<div class="meta">' + escapeHTML(fmtDate(event.started_at)) + '</div>' +
-              '</div>' +
-              '<span class="pill ' + stateClass(event.state) + '">' + escapeHTML(event.state) + '</span>' +
-            '</div>' +
-            '<div class="history-body">' +
-              '<div class="meta">Delivery: ' + escapeHTML(event.delivery_id) + '</div>' +
-              (event.ref ? '<div class="meta">Ref: ' + escapeHTML(event.ref) + '</div>' : "") +
-              (event.duration_ms ? '<div class="meta">Duration: ' + escapeHTML(event.duration_ms + " ms") + '</div>' : "") +
-              (event.description ? '<div class="meta">Description: ' + escapeHTML(event.description) + '</div>' : "") +
-              renderHooks(event) +
-            '</div>' +
-          '</article>'
-        ).join("");
+      renderProjectDetail();
     }
 
     function renderProjectDetail() {
@@ -915,7 +912,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         '<h2>' + escapeHTML(project.repo) + '</h2>' +
         '<div class="toolbar">' +
           '<span>' + escapeHTML(projectSummary(project)) + '</span>' +
-          '<span class="pill ' + stateClass(project.state) + '">' + escapeHTML(project.state || "known") + '</span>' +
+          '<span class="pill ' + stateClass((latestConfiguredEvent(project) || {}).state) + '">' + escapeHTML((latestConfiguredEvent(project) || {}).state || "known") + '</span>' +
         '</div>' +
         (project.ref || project.hash ?
           '<article class="history-event"><div class="history-body">' +
@@ -924,6 +921,18 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
             (project.updated_at ? '<div class="meta">Updated: ' + escapeHTML(fmtDate(project.updated_at)) + '</div>' : "") +
           '</div></article>' : "") +
         renderConfiguredEvents(project);
+    }
+
+    function renderEventQueue() {
+      const rows = sortedQueueEvents();
+      eventQueueEl.innerHTML = rows.length ? rows.map(event =>
+        '<div class="queue-row">' +
+          '<div><div class="repo">' + escapeHTML(event.repo) + '</div><div class="meta">' + escapeHTML(fmtDate(event.updated_at || event.started_at)) + '</div></div>' +
+          '<div class="meta">' + eventLabel(event) + '</div>' +
+          '<div><span class="pill ' + stateClass(event.state) + '">' + escapeHTML(event.state || "received") + '</span></div>' +
+          '<div class="meta">' + escapeHTML(event.delivery_id || "") + '</div>' +
+        '</div>'
+      ).join("") : '<div class="empty">No events received yet.</div>';
     }
 
     function loadProjects() {
@@ -939,28 +948,24 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         [...existingProjects.keys()].forEach(repo => {
           if (!seen.has(repo)) existingProjects.delete(repo);
         });
-        if (selectedMode === "existing" && selectedRepo) {
-          const current = existingProjects.get(selectedRepo);
-          if (current && (!selectedProjectDetail || selectedProjectDetail.repo !== selectedRepo)) {
-            selectedProjectDetail = current;
-          }
-        }
-        render();
+        const loads = data.filter(repo => typeof repo === "string").map(repo => loadProjectDetail(repo, false));
+        return Promise.all(loads).then(() => render());
       }).catch(() => render());
     }
 
-    function loadProjectDetail(repo) {
-      if (!repo) return;
-      fetch("/projects/" + repo.split("/").map(encodeURIComponent).join("/")).then(resp => {
+    function loadProjectDetail(repo, shouldRender = true) {
+      if (!repo) return Promise.resolve();
+      return fetch("/projects/" + repo.split("/").map(encodeURIComponent).join("/")).then(resp => {
         if (!resp.ok) throw new Error("project not found");
         return resp.json();
       }).then(project => {
+        project.loaded = true;
         existingProjects.set(project.repo, project);
-        selectedProjectDetail = project;
-        render();
+        if (project.repo === selectedRepo) selectedProjectDetail = project;
+        if (shouldRender) render();
       }).catch(() => {
-        selectedProjectDetail = existingProjects.get(repo) || null;
-        render();
+        if (repo === selectedRepo) selectedProjectDetail = existingProjects.get(repo) || null;
+        if (shouldRender) render();
       });
     }
 
@@ -969,13 +974,13 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       projectRefreshTimer = setTimeout(() => {
         projectRefreshTimer = null;
         loadProjects();
-        if (selectedMode === "existing") loadProjectDetail(selectedRepo);
+        if (selectedRepo) loadProjectDetail(selectedRepo);
       }, 750);
     }
 
     function loadEvents() {
       return fetch("/events").then(resp => resp.ok ? resp.json() : []).then(data => {
-        data.forEach(upsert);
+        data.forEach(upsertQueueEvent);
       });
     }
 
@@ -984,7 +989,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         loadEvents().catch(() => {}),
         loadProjects()
       ]).then(() => {
-        if (selectedMode === "existing" && selectedRepo) loadProjectDetail(selectedRepo);
+        if (selectedRepo) loadProjectDetail(selectedRepo);
       });
     }
 
@@ -1005,7 +1010,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       }
     });
     source.addEventListener("error", () => connectionEl.textContent = "reconnecting");
-    source.addEventListener("event", msg => upsert(JSON.parse(msg.data)));
+    source.addEventListener("event", msg => upsertQueueEvent(JSON.parse(msg.data)));
   </script>
 </body>
 </html>`)))
