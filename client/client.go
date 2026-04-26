@@ -317,6 +317,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			}
 		} else if hooks.Pre != "" {
 			log.Debug().Str("event", eventLabel(event)).Msg("skipping global pre hook (filtered)")
+			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:pre", "skipped", "Skipped by global pre hook filters.", "")
 		}
 
 		if hooks.EventPre != "" {
@@ -374,7 +375,10 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 
 			// Event-specific notify (filtered by notify_on, only if hooks ran)
 			if hooksExecuted && hooks.EventNotify != "" && ShouldNotify(hooks.EventNotifyOn, eventPostState) {
-				sendNotification(ctx, dispatch, "event:post", hooks.EventNotify, eventPostOut, eventPostState, hooks.EventNotifyOn, event)
+				sendNotification(ctx, dispatch, "event:notify", hooks.EventNotify, eventPostOut, eventPostState, hooks.EventNotifyOn, event)
+				projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "event:notify", "success", "Notification queued.", "")
+			} else if hooks.EventNotify != "" {
+				projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "event:notify", "skipped", "Skipped by notify_on filter.", "")
 			}
 
 			// Global post hook
@@ -403,14 +407,19 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				}
 			} else if hooks.Post != "" {
 				log.Debug().Str("event", eventLabel(event)).Msg("skipping global post hook (filtered)")
+				projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:post", "skipped", "Skipped by global post hook filters.", "")
 			}
 		}
 
 		// Global notify (filtered by notify_on, only if hooks ran)
 		if hooksExecuted && hooks.Notify != "" && ShouldNotify(hooks.NotifyOn, state) {
 			sendNotification(ctx, dispatch, "global:summary", hooks.Notify, lastOut, state, hooks.NotifyOn, event)
+			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:summary", "success", "Notification queued.", "")
+		} else if hooksExecuted && hooks.Notify != "" {
+			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:summary", "skipped", "Skipped by notify_on filter.", "")
 		} else if !hooksExecuted && hooks.Notify != "" {
 			log.Debug().Str("event", eventLabel(event)).Msg("skipping notification (no hooks executed)")
+			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:summary", "skipped", "Skipped because no hooks executed.", "")
 		}
 	}
 

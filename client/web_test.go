@@ -169,6 +169,59 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	}
 }
 
+func TestConfiguredGlobalHookSlotsCaptureOutputAndSkippedNotify(t *testing.T) {
+	ctx := t.Context()
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	event := protocol.EventMsg{
+		DeliveryID:  "delivery-1",
+		GitHubEvent: "check_suite",
+		Action:      "completed",
+		Repo:        "nitecon/eventic",
+		Ref:         "HEAD",
+	}
+	store.UpsertManagedProject(ctx, "nitecon/eventic", "HEAD", "abc123")
+	var cfg Config
+	cfg.GlobalHooks.Pre = "echo preparing"
+	cfg.GlobalHooks.Post = "echo done"
+	cfg.GlobalHooks.Notify = "Global hook {{.State}}"
+	store.SyncConfiguredEvents(ctx, "nitecon/eventic", "", cfg)
+
+	store.StartConfiguredEvent(ctx, "nitecon/eventic", event, "global:pre")
+	store.UpdateConfiguredEvent(ctx, "nitecon/eventic", event, "global:pre", "success", "preparing nitecon/eventic", "")
+	store.StartConfiguredEvent(ctx, "nitecon/eventic", event, "global:post")
+	store.UpdateConfiguredEvent(ctx, "nitecon/eventic", event, "global:post", "success", "done", "")
+	store.UpdateConfiguredEvent(ctx, "nitecon/eventic", event, "global:summary", "skipped", "Skipped by notify_on filter.", "")
+
+	project, err := store.GetProject(ctx, "nitecon/eventic")
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	events := map[string]ConfiguredEvent{}
+	for _, event := range project.ConfiguredEvents {
+		events[event.EventKey] = event
+	}
+	for key, expected := range map[string]string{
+		"global:pre":    "preparing nitecon/eventic",
+		"global:post":   "done",
+		"global:notify": "Skipped by notify_on filter.",
+	} {
+		if events[key].LatestOutput != expected {
+			t.Fatalf("expected %s output %q, got %#v", key, expected, events[key])
+		}
+	}
+	if events["global:notify"].State != "skipped" {
+		t.Fatalf("expected global notify skipped, got %q", events["global:notify"].State)
+	}
+}
+
 func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
 	ctx := t.Context()
 	store, err := OpenProjectStore(ctx, StateConfig{
@@ -210,6 +263,28 @@ func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
 		if !seen[repo] {
 			t.Fatalf("expected project %q in %#v", repo, projects)
 		}
+	}
+}
+
+func TestRunHookWithOutputExposesReposDir(t *testing.T) {
+	ctx := t.Context()
+	reposDir := t.TempDir()
+	repoPath := filepath.Join(reposDir, "nitecon", "eventic")
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+
+	out, err := RunHookWithOutput(ctx, repoPath, `printf "%s" "$EVENTIC_REPOS/$EVENTIC_REPO"`, "global:post", protocol.EventMsg{
+		DeliveryID:  "delivery-1",
+		GitHubEvent: "push",
+		Repo:        "nitecon/eventic",
+	})
+	if err != nil {
+		t.Fatalf("run hook: %v", err)
+	}
+	expected := filepath.Join(reposDir, "nitecon", "eventic")
+	if out != expected {
+		t.Fatalf("expected EVENTIC_REPOS/EVENTIC_REPO %q, got %q", expected, out)
 	}
 }
 

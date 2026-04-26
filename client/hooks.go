@@ -15,13 +15,13 @@ import (
 
 // HookSet holds all hooks resolved for a single event.
 type HookSet struct {
-	Pre         string   // global pre hook — runs for every event
-	Post        string   // global post hook — runs for every event
-	Notify      string   // global notify template
-	NotifyOn    []string // global notify filter (e.g. ["failure"])
-	EventPre    string   // event-specific pre hook
-	EventPost   string   // event-specific post hook
-	EventNotify string   // event-specific notify template
+	Pre           string   // global pre hook — runs for every event
+	Post          string   // global post hook — runs for every event
+	Notify        string   // global notify template
+	NotifyOn      []string // global notify filter (e.g. ["failure"])
+	EventPre      string   // event-specific pre hook
+	EventPost     string   // event-specific post hook
+	EventNotify   string   // event-specific notify template
 	EventNotifyOn []string // event-specific notify filter
 }
 
@@ -218,6 +218,7 @@ func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, ev
 	cmd.Dir = repoPath
 	cmd.Env = append(os.Environ(),
 		"EVENTIC_REPO="+event.Repo,
+		"EVENTIC_REPOS="+reposRootForHook(repoPath, event.Repo),
 		"EVENTIC_REF="+event.Ref,
 		"EVENTIC_EVENT="+event.GitHubEvent,
 		"EVENTIC_ACTION="+event.Action,
@@ -240,3 +241,10 @@ func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, ev
 	return outStr, nil
 }
 
+func reposRootForHook(repoPath, repo string) string {
+	root := repoPath
+	for range strings.Split(repo, "/") {
+		root = filepath.Dir(root)
+	}
+	return root
+}

@@ -582,6 +582,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     .success { color: var(--success); }
     .failure { color: var(--failure); }
     .running { color: var(--running); }
+    .skipped { color: var(--muted); }
     .meta {
       color: var(--muted);
       font-size: 13px;
@@ -753,7 +754,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     const connectionEl = document.getElementById("connection");
 
     function stateClass(state) {
-      return ["success", "failure", "running"].includes(state) ? state : "";
+      return ["success", "failure", "running", "skipped"].includes(state) ? state : "";
     }
 
     function fmtDate(value) {

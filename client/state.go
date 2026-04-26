@@ -830,6 +830,8 @@ func configuredEventKeys(event protocol.EventMsg, hookName string) []string {
 		hook = "pre"
 	case "event:post":
 		hook = "post"
+	case "event:notify":
+		hook = "notify"
 	default:
 		return nil
 	}

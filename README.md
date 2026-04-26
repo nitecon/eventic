@@ -460,6 +460,7 @@ Every hook receives these environment variables:
 
 | Variable | Description |
 |---|---|
+| `EVENTIC_REPOS` | Root directory containing managed repositories (e.g., `/opt/eventic/repos`) |
 | `EVENTIC_REPO` | Full repository name (e.g., `org/repo`) |
 | `EVENTIC_REF` | Git ref (branch name, tag, or PR ref) |
 | `EVENTIC_EVENT` | GitHub event type (e.g., `push`, `pull_request`) |
