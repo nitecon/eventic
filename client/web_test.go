@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nitecon/eventic/protocol"
 )
@@ -69,4 +70,55 @@ func TestEventsHandlerReturnsJSON(t *testing.T) {
 	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
 		t.Fatalf("expected json content type, got %q", contentType)
 	}
+}
+
+func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
+	ctx := t.Context()
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	event := ExecutionEvent{
+		DeliveryID: "delivery-1",
+		Repo:       "nitecon/eventic",
+		Event:      "push",
+		State:      "running",
+		StartedAt:  testTime(),
+		UpdatedAt:  testTime(),
+	}
+	store.StartProject(ctx, event)
+	store.UpdateGitState(ctx, "nitecon/eventic", "main", "abc123")
+	store.UpdateOutput(ctx, "nitecon/eventic", "success", "build ok")
+
+	req := httptest.NewRequest(http.MethodGet, "/projects/nitecon/eventic", nil)
+	rec := httptest.NewRecorder()
+
+	projectsHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var project ProjectState
+	if err := json.Unmarshal(rec.Body.Bytes(), &project); err != nil {
+		t.Fatalf("expected json response: %v", err)
+	}
+	if project.Repo != "nitecon/eventic" {
+		t.Fatalf("unexpected project repo: %q", project.Repo)
+	}
+	if project.Hash != "abc123" {
+		t.Fatalf("unexpected hash: %q", project.Hash)
+	}
+	if project.LatestOutput != "build ok" {
+		t.Fatalf("unexpected latest output: %q", project.LatestOutput)
+	}
+}
+
+func testTime() time.Time {
+	return time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC)
 }

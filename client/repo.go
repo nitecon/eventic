@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
@@ -94,4 +95,21 @@ func stripRefPrefix(ref string) string {
 		}
 	}
 	return ref
+}
+
+// CurrentGitState returns the checked-out ref name and commit hash for a repo.
+func CurrentGitState(repoPath string) (string, string, error) {
+	refCmd := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	refBytes, err := refCmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("git current ref: %w", err)
+	}
+
+	hashCmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+	hashBytes, err := hashCmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("git current hash: %w", err)
+	}
+
+	return strings.TrimSpace(string(refBytes)), strings.TrimSpace(string(hashBytes)), nil
 }

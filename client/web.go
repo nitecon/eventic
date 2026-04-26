@@ -83,7 +83,7 @@ func NewExecutionLog(cfg WebConfig) *ExecutionLog {
 	}
 }
 
-func (l *ExecutionLog) StartEvent(event protocol.EventMsg) {
+func (l *ExecutionLog) StartEvent(event protocol.EventMsg) ExecutionEvent {
 	now := time.Now()
 	rec := ExecutionEvent{
 		ID:         event.DeliveryID,
@@ -106,10 +106,11 @@ func (l *ExecutionLog) StartEvent(event protocol.EventMsg) {
 	l.mu.Unlock()
 
 	l.publish(snapshot)
+	return snapshot
 }
 
-func (l *ExecutionLog) FinishEvent(deliveryID, state, desc string) {
-	l.updateEvent(deliveryID, func(rec *ExecutionEvent) {
+func (l *ExecutionLog) FinishEvent(deliveryID, state, desc string) *ExecutionEvent {
+	return l.updateEvent(deliveryID, func(rec *ExecutionEvent) {
 		now := time.Now()
 		rec.State = state
 		rec.Description = trimString(desc, l.maxOutputBytes)
@@ -199,18 +200,19 @@ func (l *ExecutionLog) Subscribe() (<-chan ExecutionEvent, func()) {
 	return ch, cancel
 }
 
-func (l *ExecutionLog) updateEvent(deliveryID string, mutate func(*ExecutionEvent)) {
+func (l *ExecutionLog) updateEvent(deliveryID string, mutate func(*ExecutionEvent)) *ExecutionEvent {
 	l.mu.Lock()
 	idx, ok := l.byDeliveryID[deliveryID]
 	if !ok {
 		l.mu.Unlock()
-		return
+		return nil
 	}
 	mutate(&l.events[idx])
 	snapshot := cloneEventLocked(l.events[idx])
 	l.mu.Unlock()
 
 	l.publish(snapshot)
+	return &snapshot
 }
 
 func (l *ExecutionLog) publish(event ExecutionEvent) {
@@ -240,7 +242,7 @@ func (l *ExecutionLog) reindexLocked() {
 	}
 }
 
-func StartWebConsole(ctx context.Context, cfg WebConfig, logStore *ExecutionLog) error {
+func StartWebConsole(ctx context.Context, cfg WebConfig, logStore *ExecutionLog, projectStore *ProjectStore) error {
 	listen := cfg.Listen
 	if listen == "" {
 		listen = defaultWebListen
@@ -250,6 +252,8 @@ func StartWebConsole(ctx context.Context, cfg WebConfig, logStore *ExecutionLog)
 	mux.HandleFunc("/", webIndexHandler)
 	mux.HandleFunc("/events", eventsHandler(logStore))
 	mux.HandleFunc("/events/stream", eventsStreamHandler(logStore))
+	mux.HandleFunc("/projects", projectsHandler(projectStore))
+	mux.HandleFunc("/projects/", projectsHandler(projectStore))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -276,6 +280,48 @@ func StartWebConsole(ctx context.Context, cfg WebConfig, logStore *ExecutionLog)
 		return nil
 	}
 	return err
+}
+
+func projectsHandler(projectStore *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		repo := strings.TrimPrefix(r.URL.Path, "/projects/")
+		if repo != r.URL.Path {
+			repo = strings.Trim(repo, "/")
+			if repo == "" || strings.Count(repo, "/") != 1 {
+				http.NotFound(w, r)
+				return
+			}
+			project, err := projectStore.GetProject(r.Context(), repo)
+			if isNotFound(err) {
+				http.NotFound(w, r)
+				return
+			}
+			if err != nil {
+				http.Error(w, "failed to read project", http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(project)
+			return
+		}
+
+		if r.URL.Path != "/projects" {
+			http.NotFound(w, r)
+			return
+		}
+
+		projects, err := projectStore.ListProjects(r.Context())
+		if err != nil {
+			http.Error(w, "failed to read projects", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(projects)
+	}
 }
 
 func eventsHandler(logStore *ExecutionLog) http.HandlerFunc {

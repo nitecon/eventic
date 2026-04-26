@@ -198,11 +198,6 @@ global-ignore-post:
   - release.published
 default-notify: "Hook {{.State}} for {{.Repo}} ({{.Event}}.{{.Action}})"
 default-notify-on: [failure]
-web:
-  enabled: true
-  listen: "127.0.0.1:16384"
-  max_events: 100
-  max_output_bytes: 65536
 global-hooks:
   pre: "echo preparing ${EVENTIC_REPO}..."
   post: "claude -p 'Validate the repository at ${EVENTIC_REPOS}/${EVENTIC_REPO} and report any issues.'"
@@ -246,8 +241,34 @@ subscribe:
 | `web.listen` | Address for the local web console. Defaults to `127.0.0.1:16384` when enabled |
 | `web.max_events` | Number of recent client executions retained in memory. Defaults to `100` |
 | `web.max_output_bytes` | Maximum retained output bytes per hook/description. Defaults to `65536` |
+| `state.enabled` | Enables the client-local SQLite project state database. Defaults to `false` |
+| `state.path` | SQLite database path for project state. Defaults to `/opt/eventic/state/eventic.db` when enabled |
 
-### Client Web Console
+### Client State and Web Console
+
+The project state database and the web server are both opt-in. If `state.enabled` is not true, no SQLite database is opened or written. If `web.enabled` is not true, the client does not start an HTTP listener.
+
+To persist the latest managed-project state to SQLite without exposing an HTTP endpoint:
+
+```yaml
+state:
+  enabled: true
+  path: "/opt/eventic/state/eventic.db"
+```
+
+To also expose the local web/API server:
+
+```yaml
+web:
+  enabled: true
+  listen: "127.0.0.1:16384"
+  max_events: 100
+  max_output_bytes: 65536
+
+state:
+  enabled: true
+  path: "/opt/eventic/state/eventic.db"
+```
 
 When `web.enabled` is true, the client starts a local-only web console on `web.listen`. This runs on the Eventic client, not the public relay server, so hook output and internal build logs stay on the machine that executed them.
 
@@ -256,7 +277,23 @@ When `web.enabled` is true, the client starts a local-only web console on `web.l
 | `/` | Human-readable dashboard for recent events and hook output |
 | `/events` | JSON array of recent executions, newest first |
 | `/events/stream` | Server-Sent Events stream for live execution updates |
+| `/projects` | JSON array of persisted project states from SQLite, newest first |
+| `/projects/owner/repo` | JSON object for a single persisted project state |
 | `/healthz` | Local health check |
+
+The SQLite database stores one row per managed repository in the `projects` table. Each row contains the repo name, latest GitHub event/action/delivery ID, final state, latest combined stdout/stderr output, latest description, checked-out git ref, checked-out commit hash, and timing fields.
+
+For Kubernetes clients, mount persistent storage at `/opt/eventic/state` or set `state.path` to a path inside your own volume mount:
+
+```yaml
+volumeMounts:
+  - name: eventic-state
+    mountPath: /opt/eventic/state
+volumes:
+  - name: eventic-state
+    persistentVolumeClaim:
+      claimName: eventic-state
+```
 
 ### Subscription Patterns
 

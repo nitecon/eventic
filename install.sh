@@ -5,6 +5,7 @@ REPO="nitecon/eventic"
 INSTALL_DIR="/opt/eventic"
 BIN_DIR="${INSTALL_DIR}/bin"
 REPOS_DIR="${INSTALL_DIR}/repos"
+STATE_DIR="${INSTALL_DIR}/state"
 CONFIG_DIR="/etc/eventic"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 SYMLINK="/usr/local/bin/eventic-client"
@@ -51,7 +52,7 @@ fi
 
 # --- Directories ------------------------------------------------------------
 
-mkdir -p "$BIN_DIR" "$REPOS_DIR" "$CONFIG_DIR"
+mkdir -p "$BIN_DIR" "$REPOS_DIR" "$STATE_DIR" "$CONFIG_DIR"
 chown -R eventic:eventic "$INSTALL_DIR"
 info "Directory structure ready (${INSTALL_DIR})"
 

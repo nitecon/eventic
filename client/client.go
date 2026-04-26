@@ -41,6 +41,7 @@ type Config struct {
 	RequireApproval   bool            `yaml:"require_approval"`
 	ApprovalsPath     string          `yaml:"approvals_path"`
 	Web               WebConfig       `yaml:"web"`
+	State             StateConfig     `yaml:"state"`
 }
 
 // Run connects to the relay and processes events. Reconnects on failure.
@@ -55,9 +56,15 @@ func Run(ctx context.Context, cfg Config) {
 
 	n := notifier.NewNotifier(cfg.Notifier)
 	webLog := NewExecutionLog(cfg.Web)
+	projectStore, err := OpenProjectStore(ctx, cfg.State)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to open project state database")
+	}
+	defer projectStore.Close()
+	projectStore.SeedFromReposDir(ctx, cfg.ReposDir)
 	if cfg.Web.Enabled {
 		go func() {
-			if err := StartWebConsole(ctx, cfg.Web, webLog); err != nil {
+			if err := StartWebConsole(ctx, cfg.Web, webLog, projectStore); err != nil {
 				log.Error().Err(err).Msg("web console stopped")
 			}
 		}()
@@ -115,7 +122,7 @@ func Run(ctx context.Context, cfg Config) {
 		default:
 		}
 
-		err := connect(ctx, cfg, workerSem, dispatch, approvalStore, webLog)
+		err := connect(ctx, cfg, workerSem, dispatch, approvalStore, webLog, projectStore)
 		if err != nil {
 			log.Error().Err(err).Dur("backoff", backoff).Msg("connection lost, reconnecting")
 		}
@@ -133,7 +140,7 @@ func Run(ctx context.Context, cfg Config) {
 	}
 }
 
-func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore, webLog *ExecutionLog) error {
+func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore, webLog *ExecutionLog, projectStore *ProjectStore) error {
 	conn, _, err := websocket.Dial(ctx, cfg.Relay, nil)
 	if err != nil {
 		return err
@@ -193,7 +200,7 @@ func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch 
 				log.Error().Err(err).Msg("failed to parse event")
 				continue
 			}
-			go processEvent(ctx, conn, cfg, event, workerSem, dispatch, approvalStore, webLog)
+			go processEvent(ctx, conn, cfg, event, workerSem, dispatch, approvalStore, webLog, projectStore)
 
 		case "Ping":
 			pong, _ := json.Marshal(protocol.Envelope{MsgType: "Pong"})
@@ -202,7 +209,7 @@ func connect(ctx context.Context, cfg Config, workerSem chan struct{}, dispatch 
 	}
 }
 
-func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event protocol.EventMsg, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore, webLog *ExecutionLog) {
+func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event protocol.EventMsg, workerSem chan struct{}, dispatch *notifier.Dispatcher, approvalStore *ApprovalStore, webLog *ExecutionLog, projectStore *ProjectStore) {
 	// Acquire worker slot (bounded concurrency)
 	workerSem <- struct{}{}
 	defer func() { <-workerSem }()
@@ -222,9 +229,12 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 
 	state := "success"
 	desc := ""
-	webLog.StartEvent(event)
+	startedEvent := webLog.StartEvent(event)
+	projectStore.StartProject(ctx, startedEvent)
 	defer func() {
-		webLog.FinishEvent(event.DeliveryID, state, desc)
+		if finishedEvent := webLog.FinishEvent(event.DeliveryID, state, desc); finishedEvent != nil {
+			projectStore.FinishProject(ctx, *finishedEvent)
+		}
 	}()
 
 	// ── Approval Check ─────────────────────────────────────────────────────────
@@ -241,6 +251,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			fmt.Sprintf("Blocked event from unapproved source. To approve, run:\n`eventic-client approve --repo %s` or `eventic-client approve --sender %s`", event.Repo, event.Sender),
 			"", "failure", nil, event)
 		webLog.AddHook(event.DeliveryID, "approval:required", "failure", "")
+		projectStore.UpdateOutput(ctx, event.Repo, "failure", "")
 
 		status, _ := json.Marshal(protocol.StatusMsg{
 			MsgType:     "Status",
@@ -289,9 +300,11 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				desc = err.Error()
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "global:pre", "failure", out)
+				projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
 			} else {
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "global:pre", "success", out)
+				projectStore.UpdateOutput(ctx, event.Repo, "success", out)
 			}
 		} else if hooks.Pre != "" {
 			log.Debug().Str("event", eventLabel(event)).Msg("skipping global pre hook (filtered)")
@@ -306,9 +319,11 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 				desc = err.Error()
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "event:pre", "failure", out)
+				projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
 			} else {
 				lastOut = out
 				webLog.FinishHook(event.DeliveryID, "event:pre", "success", out)
+				projectStore.UpdateOutput(ctx, event.Repo, "success", out)
 			}
 		}
 
@@ -317,6 +332,13 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 			desc = err.Error()
 			log.Error().Err(err).Msgf("Event %s on %s: checkout failed", eventLabel(event), event.Repo)
 		} else {
+			currentRef, currentHash, err := CurrentGitState(repoPath)
+			if err != nil {
+				log.Warn().Err(err).Str("repo", event.Repo).Msg("failed to read current git state")
+			} else {
+				projectStore.UpdateGitState(ctx, event.Repo, currentRef, currentHash)
+			}
+
 			// Event-specific post hook
 			eventPostState := "success"
 			var eventPostOut string
@@ -330,10 +352,12 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 					eventPostState = "failure"
 					eventPostOut = out
 					webLog.FinishHook(event.DeliveryID, "event:post", "failure", out)
+					projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
 				} else {
 					desc = out
 					eventPostOut = out
 					webLog.FinishHook(event.DeliveryID, "event:post", "success", out)
+					projectStore.UpdateOutput(ctx, event.Repo, "success", out)
 				}
 			}
 
@@ -354,13 +378,16 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 					}
 					lastOut = out
 					webLog.FinishHook(event.DeliveryID, "global:post", "failure", out)
+					projectStore.UpdateOutput(ctx, event.Repo, "failure", out)
 				} else if desc == "" {
 					desc = out
 					lastOut = out
 					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
+					projectStore.UpdateOutput(ctx, event.Repo, "success", out)
 				} else {
 					lastOut = out
 					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
+					projectStore.UpdateOutput(ctx, event.Repo, "success", out)
 				}
 			} else if hooks.Post != "" {
 				log.Debug().Str("event", eventLabel(event)).Msg("skipping global post hook (filtered)")
