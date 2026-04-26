@@ -768,17 +768,8 @@ func configuredEventsForRepo(repo, repoPath string, cfg Config) []ConfiguredEven
 		})
 	}
 
-	if cfg.GlobalHooks.Pre != "" {
-		add("client-global", "global", "pre")
-	}
-	if cfg.GlobalHooks.Post != "" {
-		add("client-global", "global", "post")
-	}
-	if cfg.GlobalHooks.Notify != "" {
-		add("client-global", "global", "notify")
-	}
-
 	if repoPath == "" {
+		addClientGlobalConfiguredEvents(cfg, add)
 		return events
 	}
 
@@ -806,15 +797,30 @@ func configuredEventsForRepo(repo, repoPath string, cfg Config) []ConfiguredEven
 					add(".eventic.yaml", rawKey, "notify")
 				}
 			}
+			return events
 		}
 	}
 
 	deployPath := filepath.Join(repoPath, ".deploy", "deploy.yml")
 	if _, err := os.Stat(deployPath); err == nil {
 		add(".deploy/deploy.yml", "push", "post")
+		return events
 	}
 
+	addClientGlobalConfiguredEvents(cfg, add)
 	return events
+}
+
+func addClientGlobalConfiguredEvents(cfg Config, add func(source, rawKey, hook string)) {
+	if cfg.GlobalHooks.Pre != "" {
+		add("client-global", "global", "pre")
+	}
+	if cfg.GlobalHooks.Post != "" {
+		add("client-global", "global", "post")
+	}
+	if cfg.GlobalHooks.Notify != "" {
+		add("client-global", "global", "notify")
+	}
 }
 
 func configuredEventKeys(event protocol.EventMsg, hookName string) []string {

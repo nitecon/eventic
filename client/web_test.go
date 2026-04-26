@@ -288,6 +288,71 @@ func TestRunHookWithOutputExposesReposDir(t *testing.T) {
 	}
 }
 
+func TestSyncConfiguredEventsPrunesClientGlobalFallbackWhenRepoConfigExists(t *testing.T) {
+	ctx := t.Context()
+	reposDir := t.TempDir()
+	repoPath := filepath.Join(reposDir, "nitecon", "volumetric")
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	writeFile(t, filepath.Join(repoPath, ".eventic.yaml"), `
+hooks:
+  pre: "echo repo pre"
+events:
+  push:
+    post: "echo push post"
+    notify: "deployed"
+`)
+
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	store.UpsertManagedProject(ctx, "nitecon/volumetric", "main", "abc123")
+	var cfg Config
+	cfg.GlobalHooks.Pre = "echo global pre"
+	cfg.GlobalHooks.Post = "echo global post"
+	cfg.GlobalHooks.Notify = "global notify"
+
+	store.SyncConfiguredEvents(ctx, "nitecon/volumetric", "", cfg)
+	events, err := store.ListConfiguredEvents(ctx, "nitecon/volumetric")
+	if err != nil {
+		t.Fatalf("list initial configured events: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected initial client-global fallback slots, got %#v", events)
+	}
+
+	store.SyncConfiguredEvents(ctx, "nitecon/volumetric", repoPath, cfg)
+	events, err = store.ListConfiguredEvents(ctx, "nitecon/volumetric")
+	if err != nil {
+		t.Fatalf("list configured events: %v", err)
+	}
+	seen := map[string]string{}
+	for _, event := range events {
+		seen[event.EventKey] = event.Source
+	}
+	for _, key := range []string{"global:post", "global:notify"} {
+		if _, ok := seen[key]; ok {
+			t.Fatalf("did not expect unreachable client-global slot %q in %#v", key, events)
+		}
+	}
+	for key, source := range map[string]string{
+		"global:pre":  ".eventic.yaml",
+		"push:post":   ".eventic.yaml",
+		"push:notify": ".eventic.yaml",
+	} {
+		if seen[key] != source {
+			t.Fatalf("expected configured event %q from %q in %#v", key, source, events)
+		}
+	}
+}
+
 func TestProjectStoreRetainsLastFiveEventsPerRepo(t *testing.T) {
 	ctx := t.Context()
 	store, err := OpenProjectStore(ctx, StateConfig{
@@ -390,10 +455,13 @@ events:
 	for _, event := range project.ConfiguredEvents {
 		keys[event.EventKey] = true
 	}
-	for _, key := range []string{"global:post", "global:pre", "push:post"} {
+	for _, key := range []string{"global:pre", "push:post"} {
 		if !keys[key] {
 			t.Fatalf("expected configured event %q in %#v", key, project.ConfiguredEvents)
 		}
+	}
+	if keys["global:post"] {
+		t.Fatalf("did not expect client-global fallback event in repo-configured project: %#v", project.ConfiguredEvents)
 	}
 }
 
