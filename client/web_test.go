@@ -91,7 +91,9 @@ func TestWebIndexIncludesActiveAndExistingProjectSections(t *testing.T) {
 		"Existing Projects",
 		`id="active-projects"`,
 		`id="existing-projects"`,
+		`id="project-search"`,
 		`fetch("/projects")`,
+		`function refreshSnapshot()`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected index body to contain %q", expected)

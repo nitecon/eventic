@@ -501,6 +501,42 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       letter-spacing: 0;
       text-transform: uppercase;
     }
+    .active-well {
+      flex: 0 0 auto;
+    }
+    .existing-well {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .search-box {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .search-input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0 10px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+    }
+    .search-input:focus {
+      outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+      outline-offset: 1px;
+    }
+    .project-list {
+      overflow: auto;
+    }
+    .existing-well .project-list {
+      flex: 1 1 auto;
+      min-height: 160px;
+      max-height: calc(100vh - 244px);
+    }
     .event {
       width: 100%;
       min-height: 84px;
@@ -637,15 +673,18 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
   </header>
   <main>
     <section class="sidebar">
-      <section class="well">
+      <section class="well active-well">
         <div class="well-title">Active Projects</div>
-        <div id="active-projects">
+        <div class="project-list" id="active-projects">
           <div class="empty">No active projects.</div>
         </div>
       </section>
-      <section class="well">
+      <section class="well existing-well">
         <div class="well-title">Existing Projects</div>
-        <div id="existing-projects">
+        <div class="search-box">
+          <input class="search-input" id="project-search" type="search" placeholder="Search repositories" autocomplete="off">
+        </div>
+        <div class="project-list" id="existing-projects">
           <div class="empty">No projects yet.</div>
         </div>
       </section>
@@ -662,8 +701,11 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     let selectedMode = "existing";
     let selectedProjectDetail = null;
     let projectRefreshTimer = null;
+    let projectSearch = "";
+    let lastOpenRefresh = 0;
     const activeEl = document.getElementById("active-projects");
     const existingEl = document.getElementById("existing-projects");
+    const searchEl = document.getElementById("project-search");
     const detailEl = document.getElementById("detail");
     const connectionEl = document.getElementById("connection");
 
@@ -723,7 +765,10 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     }
 
     function sortedExistingProjects() {
-      return [...existingProjects.values()].sort((a, b) =>
+      const query = projectSearch.trim().toLowerCase();
+      return [...existingProjects.values()].filter(project =>
+        !query || project.repo.toLowerCase().includes(query)
+      ).sort((a, b) =>
         new Date(b.updated_at || b.started_at || 0).getTime() -
         new Date(a.updated_at || a.started_at || 0).getTime() ||
         a.repo.localeCompare(b.repo)
@@ -799,7 +844,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
           '<div class="meta">' + escapeHTML(projectSummary(project)) + '</div>' +
           (project.ref ? '<div class="meta">' + escapeHTML(project.ref) + '</div>' : "") +
         '</button>'
-      ).join("") : '<div class="empty">No projects yet.</div>';
+      ).join("") : '<div class="empty">' + (projectSearch ? 'No matching projects.' : 'No projects yet.') + '</div>';
 
       document.querySelectorAll("button[data-repo]").forEach(button => {
         button.addEventListener("click", () => {
@@ -928,15 +973,37 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       }, 750);
     }
 
-    Promise.all([
-      fetch("/events").then(resp => resp.json()).then(data => data.forEach(upsert)).catch(() => {}),
-      loadProjects()
-    ]).then(() => {
+    function loadEvents() {
+      return fetch("/events").then(resp => resp.ok ? resp.json() : []).then(data => {
+        data.forEach(upsert);
+      });
+    }
+
+    function refreshSnapshot() {
+      return Promise.all([
+        loadEvents().catch(() => {}),
+        loadProjects()
+      ]).then(() => {
+        if (selectedMode === "existing" && selectedRepo) loadProjectDetail(selectedRepo);
+      });
+    }
+
+    searchEl.addEventListener("input", () => {
+      projectSearch = searchEl.value;
       render();
     });
 
+    refreshSnapshot().then(() => render());
+
     const source = new EventSource("/events/stream");
-    source.addEventListener("open", () => connectionEl.textContent = "live");
+    source.addEventListener("open", () => {
+      connectionEl.textContent = "live";
+      const now = Date.now();
+      if (now - lastOpenRefresh > 1000) {
+        lastOpenRefresh = now;
+        refreshSnapshot();
+      }
+    });
     source.addEventListener("error", () => connectionEl.textContent = "reconnecting");
     source.addEventListener("event", msg => upsert(JSON.parse(msg.data)));
   </script>
