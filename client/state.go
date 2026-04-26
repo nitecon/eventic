@@ -134,16 +134,26 @@ func (s *ProjectStore) SeedFromReposDir(ctx context.Context, reposDir string, cf
 		return
 	}
 
+	started := time.Now()
+	seeded := 0
 	err := filepath.WalkDir(reposDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !entry.IsDir() || entry.Name() != ".git" {
+		if !entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+
+		gitPath := filepath.Join(path, ".git")
+		info, err := os.Stat(gitPath)
+		if err != nil || !info.IsDir() {
 			return nil
 		}
 
-		repoPath := filepath.Dir(path)
-		repo, err := filepath.Rel(reposDir, repoPath)
+		repo, err := filepath.Rel(reposDir, path)
 		if err != nil {
 			return filepath.SkipDir
 		}
@@ -152,18 +162,21 @@ func (s *ProjectStore) SeedFromReposDir(ctx context.Context, reposDir string, cf
 			return filepath.SkipDir
 		}
 
-		ref, hash, err := CurrentGitState(repoPath)
+		ref, hash, err := CurrentGitState(path)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", repo).Msg("failed to seed project state")
 			return filepath.SkipDir
 		}
 		s.UpsertManagedProject(ctx, repo, ref, hash)
-		s.SyncConfiguredEvents(ctx, repo, repoPath, cfg)
+		s.SyncConfiguredEvents(ctx, repo, path, cfg)
+		seeded++
 		return filepath.SkipDir
 	})
 	if err != nil {
 		log.Warn().Err(err).Str("repos_dir", reposDir).Msg("failed to seed project state from repos dir")
+		return
 	}
+	log.Info().Str("repos_dir", reposDir).Int("projects", seeded).Dur("duration", time.Since(started)).Msg("seeded project state from repos dir")
 }
 
 func (s *ProjectStore) UpsertManagedProject(ctx context.Context, repo, ref, hash string) {
@@ -351,14 +364,13 @@ func (s *ProjectStore) FinishProject(ctx context.Context, event ExecutionEvent) 
 	s.RecordProjectEvent(ctx, event)
 }
 
-func (s *ProjectStore) ListProjects(ctx context.Context) ([]ProjectState, error) {
+func (s *ProjectStore) ListProjects(ctx context.Context) ([]string, error) {
 	if s == nil {
-		return []ProjectState{}, nil
+		return []string{}, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT repo, ref, hash, event, action, delivery_id, state,
-			latest_output, description, started_at, finished_at, updated_at, duration_ms
+		SELECT repo
 		FROM projects
 		ORDER BY updated_at DESC
 	`)
@@ -367,21 +379,13 @@ func (s *ProjectStore) ListProjects(ctx context.Context) ([]ProjectState, error)
 	}
 	defer rows.Close()
 
-	var projects []ProjectState
+	var projects []string
 	for rows.Next() {
-		project, err := scanProject(rows)
-		if err != nil {
+		var repo string
+		if err := rows.Scan(&repo); err != nil {
 			return nil, err
 		}
-		project.RecentEvents, err = s.ListProjectEvents(ctx, project.Repo, 5)
-		if err != nil {
-			return nil, err
-		}
-		project.ConfiguredEvents, err = s.ListConfiguredEvents(ctx, project.Repo)
-		if err != nil {
-			return nil, err
-		}
-		projects = append(projects, project)
+		projects = append(projects, repo)
 	}
 	return projects, rows.Err()
 }

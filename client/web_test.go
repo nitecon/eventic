@@ -76,6 +76,29 @@ func TestEventsHandlerReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestWebIndexIncludesActiveAndExistingProjectSections(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	webIndexHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"Active Projects",
+		"Existing Projects",
+		`id="active-projects"`,
+		`id="existing-projects"`,
+		`fetch("/projects")`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected index body to contain %q", expected)
+		}
+	}
+}
+
 func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	ctx := t.Context()
 	store, err := OpenProjectStore(ctx, StateConfig{
@@ -136,6 +159,47 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	}
 	if project.ConfiguredEvents[0].LatestOutput != "build ok" {
 		t.Fatalf("unexpected configured event output: %q", project.ConfiguredEvents[0].LatestOutput)
+	}
+}
+
+func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
+	ctx := t.Context()
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	store.UpsertManagedProject(ctx, "nitecon/eventic", "main", "abc123")
+	store.UpsertManagedProject(ctx, "nitecon/another", "main", "def456")
+
+	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
+	rec := httptest.NewRecorder()
+
+	projectsHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var projects []string
+	if err := json.Unmarshal(rec.Body.Bytes(), &projects); err != nil {
+		t.Fatalf("expected json string array response: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 projects, got %d", len(projects))
+	}
+	seen := map[string]bool{}
+	for _, repo := range projects {
+		seen[repo] = true
+	}
+	for _, repo := range []string{"nitecon/eventic", "nitecon/another"} {
+		if !seen[repo] {
+			t.Fatalf("expected project %q in %#v", repo, projects)
+		}
 	}
 }
 
@@ -217,6 +281,17 @@ events:
 	var cfg Config
 	cfg.GlobalHooks.Post = "echo global post"
 	store.SeedFromReposDir(ctx, reposDir, cfg)
+
+	projects, err := store.ListProjects(ctx)
+	if err != nil {
+		t.Fatalf("list seeded projects: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("expected 1 seeded project, got %d", len(projects))
+	}
+	if projects[0] != "nitecon/eventic" {
+		t.Fatalf("unexpected seeded project repo: %q", projects[0])
+	}
 
 	project, err := store.GetProject(ctx, "nitecon/eventic")
 	if err != nil {

@@ -476,11 +476,30 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       grid-template-columns: minmax(320px, 440px) minmax(0, 1fr);
       min-height: calc(100vh - 56px);
     }
-    .events {
+    .sidebar {
       border-right: 1px solid var(--border);
       background: var(--panel);
       overflow: auto;
       max-height: calc(100vh - 56px);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .well {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .well-title {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
     }
     .event {
       width: 100%;
@@ -495,6 +514,9 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     }
     .event:hover, .event[aria-selected="true"] {
       background: color-mix(in srgb, var(--accent) 11%, transparent);
+    }
+    .well .event:last-child {
+      border-bottom: 0;
     }
     .event-head {
       display: flex;
@@ -599,7 +621,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     }
     @media (max-width: 760px) {
       main { grid-template-columns: 1fr; }
-      .events {
+      .sidebar {
         max-height: 45vh;
         border-right: 0;
         border-bottom: 1px solid var(--border);
@@ -614,18 +636,34 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     <div class="status" id="connection">connecting</div>
   </header>
   <main>
-    <section class="events" id="events">
-      <div class="empty">No projects yet.</div>
+    <section class="sidebar">
+      <section class="well">
+        <div class="well-title">Active Projects</div>
+        <div id="active-projects">
+          <div class="empty">No active projects.</div>
+        </div>
+      </section>
+      <section class="well">
+        <div class="well-title">Existing Projects</div>
+        <div id="existing-projects">
+          <div class="empty">No projects yet.</div>
+        </div>
+      </section>
     </section>
     <section class="detail" id="detail">
       <div class="empty">Select a project to inspect recent events.</div>
     </section>
   </main>
   <script>
-    const repos = new Map();
+    const activeRepos = new Map();
+    const existingProjects = new Map();
     const repoLimit = 50;
     let selectedRepo = "";
-    const listEl = document.getElementById("events");
+    let selectedMode = "existing";
+    let selectedProjectDetail = null;
+    let projectRefreshTimer = null;
+    const activeEl = document.getElementById("active-projects");
+    const existingEl = document.getElementById("existing-projects");
     const detailEl = document.getElementById("detail");
     const connectionEl = document.getElementById("connection");
 
@@ -645,10 +683,10 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
     }
 
     function upsert(event) {
-      let bucket = repos.get(event.repo);
+      let bucket = activeRepos.get(event.repo);
       if (!bucket) {
         bucket = { repo: event.repo, events: new Map(), latest: event };
-        repos.set(event.repo, bucket);
+        activeRepos.set(event.repo, bucket);
       }
       bucket.events.set(event.delivery_id, event);
       bucket.latest = latestOf([...bucket.events.values()]);
@@ -657,8 +695,12 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         bucket.events.delete(sorted.pop().delivery_id);
       }
       bucket.latest = latestOf([...bucket.events.values()]);
-      if (!selectedRepo) selectedRepo = event.repo;
+      if (!selectedRepo) {
+        selectedRepo = event.repo;
+        selectedMode = "active";
+      }
       render();
+      scheduleProjectRefresh();
     }
 
     function latestOf(events) {
@@ -673,11 +715,23 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       );
     }
 
-    function sortedRepos() {
-      return [...repos.values()].sort((a, b) =>
+    function sortedActiveRepos() {
+      return [...activeRepos.values()].filter(bucket => bucket.latest && bucket.latest.state === "running").sort((a, b) =>
         new Date((b.latest && (b.latest.updated_at || b.latest.started_at)) || 0).getTime() -
         new Date((a.latest && (a.latest.updated_at || a.latest.started_at)) || 0).getTime()
       );
+    }
+
+    function sortedExistingProjects() {
+      return [...existingProjects.values()].sort((a, b) =>
+        new Date(b.updated_at || b.started_at || 0).getTime() -
+        new Date(a.updated_at || a.started_at || 0).getTime() ||
+        a.repo.localeCompare(b.repo)
+      );
+    }
+
+    function eventLabel(event) {
+      return escapeHTML(event.event || "event") + (event.action ? "." + escapeHTML(event.action) : "");
     }
 
     function renderHooks(event) {
@@ -692,32 +746,91 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
       ).join("") : '<div class="empty">No hooks recorded for this event.</div>';
     }
 
-    function render() {
-      const rows = sortedRepos();
-      if (rows.length === 0) {
-        listEl.innerHTML = '<div class="empty">No projects yet.</div>';
-        detailEl.innerHTML = '<div class="empty">Select a project to inspect recent events.</div>';
-        return;
+    function renderConfiguredEvents(project) {
+      const events = project && project.configured_events ? project.configured_events : [];
+      return events.length ? events.map(event =>
+        '<article class="hook">' +
+          '<div class="hook-title">' +
+            '<span>' + escapeHTML(event.event_key) + '</span>' +
+            '<span class="pill ' + stateClass(event.state) + '">' + escapeHTML(event.state || "no_runs") + '</span>' +
+          '</div>' +
+          '<div class="history-body">' +
+            '<div class="meta">Source: ' + escapeHTML(event.source || "configured") + '</div>' +
+            (event.ref ? '<div class="meta">Ref: ' + escapeHTML(event.ref) + '</div>' : "") +
+            (event.hash ? '<div class="meta">Hash: ' + escapeHTML(event.hash) + '</div>' : "") +
+            (event.updated_at ? '<div class="meta">Updated: ' + escapeHTML(fmtDate(event.updated_at)) + '</div>' : "") +
+          '</div>' +
+          '<pre>' + escapeHTML(event.latest_output || "No output.") + '</pre>' +
+        '</article>'
+      ).join("") : '<div class="empty">No configured outputs for this project.</div>';
+    }
+
+    function projectSummary(project) {
+      if (project.configured_events && project.configured_events.length) {
+        const completed = project.configured_events.filter(event => event.state && event.state !== "no_runs").length;
+        return completed + ' of ' + project.configured_events.length + ' configured output' + (project.configured_events.length === 1 ? '' : 's');
       }
-      listEl.innerHTML = rows.map(bucket => {
+      if (!project.updated_at) return "not loaded";
+      return project.state && project.state !== "known" ? project.state : "no runs";
+    }
+
+    function render() {
+      const activeRows = sortedActiveRepos();
+      const existingRows = sortedExistingProjects();
+
+      activeEl.innerHTML = activeRows.length ? activeRows.map(bucket => {
         const latest = bucket.latest;
-        return '<button class="event" type="button" data-repo="' + escapeHTML(bucket.repo) + '" aria-selected="' + (bucket.repo === selectedRepo) + '">' +
+        return '<button class="event" type="button" data-mode="active" data-repo="' + escapeHTML(bucket.repo) + '" aria-selected="' + (selectedMode === "active" && bucket.repo === selectedRepo) + '">' +
           '<div class="event-head">' +
             '<div class="repo">' + escapeHTML(bucket.repo) + '</div>' +
             '<div class="pill ' + stateClass(latest.state) + '">' + escapeHTML(latest.state) + '</div>' +
           '</div>' +
-          '<div class="meta">' + escapeHTML(latest.event) + (latest.action ? "." + escapeHTML(latest.action) : "") + '</div>' +
+          '<div class="meta">' + eventLabel(latest) + '</div>' +
           '<div class="meta">' + bucket.events.size + ' recent event' + (bucket.events.size === 1 ? '' : 's') + '</div>' +
         '</button>';
-      }).join("");
-      listEl.querySelectorAll("button[data-repo]").forEach(button => {
+      }).join("") : '<div class="empty">No active projects.</div>';
+
+      existingEl.innerHTML = existingRows.length ? existingRows.map(project =>
+        '<button class="event" type="button" data-mode="existing" data-repo="' + escapeHTML(project.repo) + '" aria-selected="' + (selectedMode === "existing" && project.repo === selectedRepo) + '">' +
+          '<div class="event-head">' +
+            '<div class="repo">' + escapeHTML(project.repo) + '</div>' +
+            '<div class="pill ' + stateClass(project.state) + '">' + escapeHTML(project.state || "known") + '</div>' +
+          '</div>' +
+          '<div class="meta">' + escapeHTML(projectSummary(project)) + '</div>' +
+          (project.ref ? '<div class="meta">' + escapeHTML(project.ref) + '</div>' : "") +
+        '</button>'
+      ).join("") : '<div class="empty">No projects yet.</div>';
+
+      document.querySelectorAll("button[data-repo]").forEach(button => {
         button.addEventListener("click", () => {
           selectedRepo = button.dataset.repo;
+          selectedMode = button.dataset.mode;
+          if (selectedMode === "existing") {
+            loadProjectDetail(selectedRepo);
+          }
           render();
         });
       });
 
-      const bucket = repos.get(selectedRepo) || rows[0];
+      if (!selectedRepo && existingRows.length) {
+        selectedRepo = existingRows[0].repo;
+        selectedMode = "existing";
+        loadProjectDetail(selectedRepo);
+      }
+
+      if (selectedMode === "existing") {
+        renderProjectDetail();
+      } else {
+        renderActiveDetail(activeRows);
+      }
+    }
+
+    function renderActiveDetail(activeRows) {
+      const bucket = activeRepos.get(selectedRepo) || activeRows[0];
+      if (!bucket) {
+        detailEl.innerHTML = '<div class="empty">Select a project to inspect recent events.</div>';
+        return;
+      }
       selectedRepo = bucket.repo;
       const latest = bucket.latest;
       const history = sortedEvents(bucket);
@@ -731,7 +844,7 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
           '<article class="history-event">' +
             '<div class="history-title">' +
               '<div>' +
-                '<div class="repo">' + escapeHTML(event.event) + (event.action ? "." + escapeHTML(event.action) : "") + '</div>' +
+                '<div class="repo">' + eventLabel(event) + '</div>' +
                 '<div class="meta">' + escapeHTML(fmtDate(event.started_at)) + '</div>' +
               '</div>' +
               '<span class="pill ' + stateClass(event.state) + '">' + escapeHTML(event.state) + '</span>' +
@@ -747,8 +860,78 @@ var webIndexTemplate = template.Must(template.New("index").Parse(strings.TrimSpa
         ).join("");
     }
 
-    fetch("/events").then(resp => resp.json()).then(data => {
-      data.forEach(upsert);
+    function renderProjectDetail() {
+      const project = selectedProjectDetail && selectedProjectDetail.repo === selectedRepo ? selectedProjectDetail : existingProjects.get(selectedRepo);
+      if (!project) {
+        detailEl.innerHTML = '<div class="empty">Select a project to inspect configured outputs.</div>';
+        return;
+      }
+      detailEl.innerHTML =
+        '<h2>' + escapeHTML(project.repo) + '</h2>' +
+        '<div class="toolbar">' +
+          '<span>' + escapeHTML(projectSummary(project)) + '</span>' +
+          '<span class="pill ' + stateClass(project.state) + '">' + escapeHTML(project.state || "known") + '</span>' +
+        '</div>' +
+        (project.ref || project.hash ?
+          '<article class="history-event"><div class="history-body">' +
+            (project.ref ? '<div class="meta">Ref: ' + escapeHTML(project.ref) + '</div>' : "") +
+            (project.hash ? '<div class="meta">Hash: ' + escapeHTML(project.hash) + '</div>' : "") +
+            (project.updated_at ? '<div class="meta">Updated: ' + escapeHTML(fmtDate(project.updated_at)) + '</div>' : "") +
+          '</div></article>' : "") +
+        renderConfiguredEvents(project);
+    }
+
+    function loadProjects() {
+      return fetch("/projects").then(resp => resp.ok ? resp.json() : []).then(data => {
+        const seen = new Set();
+        data.forEach(repo => {
+          if (typeof repo !== "string") return;
+          seen.add(repo);
+          if (!existingProjects.has(repo)) {
+            existingProjects.set(repo, { repo: repo, state: "known" });
+          }
+        });
+        [...existingProjects.keys()].forEach(repo => {
+          if (!seen.has(repo)) existingProjects.delete(repo);
+        });
+        if (selectedMode === "existing" && selectedRepo) {
+          const current = existingProjects.get(selectedRepo);
+          if (current && (!selectedProjectDetail || selectedProjectDetail.repo !== selectedRepo)) {
+            selectedProjectDetail = current;
+          }
+        }
+        render();
+      }).catch(() => render());
+    }
+
+    function loadProjectDetail(repo) {
+      if (!repo) return;
+      fetch("/projects/" + repo.split("/").map(encodeURIComponent).join("/")).then(resp => {
+        if (!resp.ok) throw new Error("project not found");
+        return resp.json();
+      }).then(project => {
+        existingProjects.set(project.repo, project);
+        selectedProjectDetail = project;
+        render();
+      }).catch(() => {
+        selectedProjectDetail = existingProjects.get(repo) || null;
+        render();
+      });
+    }
+
+    function scheduleProjectRefresh() {
+      if (projectRefreshTimer) return;
+      projectRefreshTimer = setTimeout(() => {
+        projectRefreshTimer = null;
+        loadProjects();
+        if (selectedMode === "existing") loadProjectDetail(selectedRepo);
+      }, 750);
+    }
+
+    Promise.all([
+      fetch("/events").then(resp => resp.json()).then(data => data.forEach(upsert)).catch(() => {}),
+      loadProjects()
+    ]).then(() => {
       render();
     });
 
