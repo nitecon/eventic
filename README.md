@@ -272,7 +272,7 @@ state:
 
 When `web.enabled` is true, the client starts a local-only web console on `web.listen`. This runs on the Eventic client, not the public relay server, so hook output and internal build logs stay on the machine that executed them.
 
-The dashboard groups streamed events by repository. The left side separates currently running projects from existing checked-out projects. Selecting an active project shows that repository's recent event history; selecting an existing project loads its configured output slots from `/projects/owner/repo`. The browser keeps the last 50 streamed events per repository for the current page session.
+The dashboard groups streamed events by repository on the left sidebar, separating currently running projects from existing checked-out projects. Selecting any project loads its configured output slots from `/projects/owner/repo` in the detail pane. A bottom Event Queue footer streams the most recent 100 events across all repositories for the current page session, with each row updating live as hooks transition through running/success/failure.
 
 On startup, the client scans `repos_dir` and adds every checked-out repository it finds to the project inventory. That means `/projects` includes repositories that exist on disk even if Eventic has not run hooks for them since the client started. Repositories discovered later from webhook events are added immediately, then enriched with their current branch's `.eventic.yaml` or `.deploy/deploy.yml` configuration after clone/checkout completes.
 
