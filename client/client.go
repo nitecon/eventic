@@ -68,13 +68,6 @@ func Run(ctx context.Context, cfg Config) {
 	}
 	defer projectStore.Close()
 	projectStore.SeedFromReposDir(ctx, cfg.ReposDir, cfg)
-	if cfg.Web.Enabled {
-		go func() {
-			if err := StartWebConsole(ctx, cfg.Web, webLog, projectStore); err != nil {
-				log.Error().Err(err).Msg("web console stopped")
-			}
-		}()
-	}
 
 	// Health-check all notifiers at startup.
 	if err := n.Ping(ctx); err != nil {
@@ -118,6 +111,17 @@ func Run(ctx context.Context, cfg Config) {
 	}
 	workerSem := make(chan struct{}, workers)
 	log.Debug().Int("max_workers", workers).Msg("worker pool configured")
+
+	if cfg.Web.Enabled {
+		go func() {
+			replay := func(_ context.Context, event protocol.EventMsg) {
+				go processEvent(ctx, nil, cfg, event, workerSem, dispatch, approvalStore, webLog, projectStore)
+			}
+			if err := StartWebConsole(ctx, cfg, webLog, projectStore, replay); err != nil {
+				log.Error().Err(err).Msg("web console stopped")
+			}
+		}()
+	}
 
 	backoff := time.Second
 
@@ -260,13 +264,12 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		webLog.AddHook(event.DeliveryID, "approval:required", "failure", "")
 		projectStore.UpdateOutput(ctx, event.Repo, event, "approval:required", "failure", "")
 
-		status, _ := json.Marshal(protocol.StatusMsg{
+		writeStatus(ctx, conn, protocol.StatusMsg{
 			MsgType:     "Status",
 			DeliveryID:  event.DeliveryID,
 			State:       state,
 			Description: desc,
 		})
-		conn.Write(ctx, websocket.MessageText, status)
 		return
 	}
 
@@ -423,18 +426,25 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		}
 	}
 
-	status, _ := json.Marshal(protocol.StatusMsg{
+	writeStatus(ctx, conn, protocol.StatusMsg{
 		MsgType:     "Status",
 		DeliveryID:  event.DeliveryID,
 		State:       state,
 		Description: desc,
 	})
-	conn.Write(ctx, websocket.MessageText, status)
 
 	log.Debug().
 		Str("repo", event.Repo).
 		Str("state", state).
 		Msg("event processed")
+}
+
+func writeStatus(ctx context.Context, conn *websocket.Conn, status protocol.StatusMsg) {
+	if conn == nil {
+		return
+	}
+	data, _ := json.Marshal(status)
+	conn.Write(ctx, websocket.MessageText, data)
 }
 
 // sendNotification builds a Notification and dispatches it asynchronously.

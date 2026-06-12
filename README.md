@@ -272,7 +272,7 @@ state:
 
 When `web.enabled` is true, the client starts a local-only web console on `web.listen`. This runs on the Eventic client, not the public relay server, so hook output and internal build logs stay on the machine that executed them.
 
-The dashboard groups streamed events by repository on the left sidebar, separating currently running projects from existing checked-out projects. Selecting any project loads its configured output slots from `/projects/owner/repo` in the detail pane. A bottom Event Queue footer streams the most recent 100 events across all repositories for the current page session, with each row updating live as hooks transition through running/success/failure.
+The dashboard groups streamed events by repository on the left sidebar, separating currently running projects from existing checked-out projects. Selecting any project loads its configured output slots from `/projects/owner/repo` in the detail pane. The selected project detail also includes client-local controls to choose a configured event and local git ref, then trigger that event through the same hook execution path without sending anything back to the relay server. A bottom Event Queue footer streams the most recent 100 events across all repositories for the current page session, with each row updating live as hooks transition through running/success/failure.
 
 On startup, the client scans `repos_dir` and adds every checked-out repository it finds to the project inventory. That means `/projects` includes repositories that exist on disk even if Eventic has not run hooks for them since the client started. Repositories discovered later from webhook events are added immediately, then enriched with their current branch's `.eventic.yaml` or `.deploy/deploy.yml` configuration after clone/checkout completes.
 
@@ -283,6 +283,8 @@ On startup, the client scans `repos_dir` and adds every checked-out repository i
 | `/events/stream` | Server-Sent Events stream for live execution updates |
 | `/projects` | Lightweight JSON array of managed project names, including repos found on disk at startup |
 | `/projects/owner/repo` | JSON object for a single managed project, including configured event slots and latest output |
+| `/replay/refs?repo=owner/repo` | JSON array of local branch and tag refs for the selected project |
+| `/replay` | Client-local POST endpoint used by the dashboard to trigger a configured event/ref pair |
 | `/healthz` | Local health check |
 
 When persistent state is enabled, SQLite stores one current row per managed repository in the `projects` table. Each row contains the repo name, latest GitHub event/action/delivery ID, final state, latest combined stdout/stderr output, latest description, checked-out git ref, checked-out commit hash, and timing fields. SQLite also stores configured hook slots in `configured_events`: client-level global hooks, repo-level `.eventic.yaml` global hooks, repo-level `.eventic.yaml` `events:` hooks, and `.deploy/deploy.yml` fallback hooks. Configured event slots are present with `state: "no_runs"` and empty output until a matching hook runs. A compatibility `project_events` history table keeps the last 5 delivery records per repository.

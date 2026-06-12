@@ -1,6 +1,8 @@
 package client
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -94,6 +96,11 @@ func TestWebIndexIncludesActiveAndExistingProjectSections(t *testing.T) {
 		`id="project-search"`,
 		"Event Queue",
 		`id="event-queue"`,
+		`id="replay-event"`,
+		`id="replay-ref"`,
+		`id="replay-trigger"`,
+		`fetch("/replay"`,
+		`fetch("/replay/refs?repo="`,
 		`fetch("/projects")`,
 		`function refreshSnapshot()`,
 	} {
@@ -166,6 +173,101 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	}
 	if project.ConfiguredEvents[0].LatestOutput != "build ok" {
 		t.Fatalf("unexpected configured event output: %q", project.ConfiguredEvents[0].LatestOutput)
+	}
+}
+
+func TestReplayRefsHandlerReturnsBranchesAndTags(t *testing.T) {
+	reposDir := t.TempDir()
+	repoPath := filepath.Join(reposDir, "nitecon", "traderx")
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	writeFile(t, filepath.Join(repoPath, "README.md"), "# traderx\n")
+	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.email", "eventic@example.com")
+	runGit(t, repoPath, "config", "user.name", "Eventic Test")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "init")
+	runGit(t, repoPath, "branch", "feature/replay")
+	runGit(t, repoPath, "tag", "v1.0.0")
+
+	req := httptest.NewRequest(http.MethodGet, "/replay/refs?repo=nitecon/traderx", nil)
+	rec := httptest.NewRecorder()
+
+	replayRefsHandler(Config{ReposDir: reposDir}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var refs []ReplayRef
+	if err := json.Unmarshal(rec.Body.Bytes(), &refs); err != nil {
+		t.Fatalf("expected json response: %v", err)
+	}
+	seen := map[string]string{}
+	for _, ref := range refs {
+		seen[ref.Ref] = ref.Type
+	}
+	if seen["refs/heads/feature/replay"] != "branch" {
+		t.Fatalf("expected feature branch in refs: %#v", refs)
+	}
+	if seen["refs/tags/v1.0.0"] != "tag" {
+		t.Fatalf("expected tag in refs: %#v", refs)
+	}
+}
+
+func TestReplayHandlerBuildsPushEventFromConfiguredGlobal(t *testing.T) {
+	ctx := t.Context()
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	started := ExecutionEvent{
+		DeliveryID: "delivery-1",
+		Repo:       "nitecon/traderx",
+		Ref:        "refs/heads/main",
+		Event:      "workflow_run",
+		Action:     "completed",
+		State:      "success",
+		StartedAt:  testTime(),
+		UpdatedAt:  testTime(),
+	}
+	store.StartProject(ctx, started)
+	var cfg Config
+	cfg.GlobalHooks.Post = "echo global"
+	store.SyncConfiguredEvents(ctx, "nitecon/traderx", "", cfg)
+
+	events := make(chan protocol.EventMsg, 1)
+	body := bytes.NewBufferString(`{"repo":"nitecon/traderx","event_key":"push","ref":"refs/tags/v1.0.0"}`)
+	req := httptest.NewRequest(http.MethodPost, "/replay", body)
+	rec := httptest.NewRecorder()
+
+	replayHandler(store, func(ctx context.Context, event protocol.EventMsg) {
+		events <- event
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	event := <-events
+	if event.Repo != "nitecon/traderx" {
+		t.Fatalf("unexpected repo: %q", event.Repo)
+	}
+	if event.GitHubEvent != "push" || event.Action != "" {
+		t.Fatalf("expected push event, got %s.%s", event.GitHubEvent, event.Action)
+	}
+	if event.Ref != "refs/tags/v1.0.0" {
+		t.Fatalf("unexpected ref: %q", event.Ref)
+	}
+	if event.Sender != "eventic-web" {
+		t.Fatalf("unexpected sender: %q", event.Sender)
+	}
+	if !strings.HasPrefix(event.DeliveryID, "manual-") {
+		t.Fatalf("expected manual delivery id, got %q", event.DeliveryID)
 	}
 }
 
