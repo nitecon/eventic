@@ -10,39 +10,7 @@ import (
 
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
-	"gopkg.in/yaml.v3"
 )
-
-// HookSet holds all hooks resolved for a single event.
-type HookSet struct {
-	Pre           string   // global pre hook — runs for every event
-	Post          string   // global post hook — runs for every event
-	Notify        string   // global notify template
-	NotifyOn      []string // global notify filter (e.g. ["failure"])
-	EventPre      string   // event-specific pre hook
-	EventPost     string   // event-specific post hook
-	EventNotify   string   // event-specific notify template
-	EventNotifyOn []string // event-specific notify filter
-}
-
-// EventHooks defines pre/post/notify hooks for a specific event or event.action.
-type EventHooks struct {
-	Pre      string   `yaml:"pre"`
-	Post     string   `yaml:"post"`
-	Notify   string   `yaml:"notify"`
-	NotifyOn []string `yaml:"notify_on"` // e.g. ["failure"], ["success", "failure"]
-}
-
-// EventicConfig is the in-repo .eventic.yaml format.
-type EventicConfig struct {
-	Hooks struct {
-		Pre      string   `yaml:"pre"`
-		Post     string   `yaml:"post"`
-		Notify   string   `yaml:"notify"`
-		NotifyOn []string `yaml:"notify_on"`
-	} `yaml:"hooks"`
-	Events map[string]EventHooks `yaml:"events"`
-}
 
 // ShouldNotify checks whether a notification should fire based on the
 // notify_on filter and the current state. An empty filter means always notify.
@@ -56,90 +24,6 @@ func ShouldNotify(notifyOn []string, state string) bool {
 		}
 	}
 	return false
-}
-
-// DiscoverHooks checks the repo for .eventic.yaml or .deploy/deploy.yml
-// and resolves global + event-specific hooks for the given event.
-func DiscoverHooks(repoPath string, event protocol.EventMsg, globalPre, globalPost, globalNotify string, globalNotifyOn []string) HookSet {
-	var hooks HookSet
-
-	configPath := filepath.Join(repoPath, ".eventic.yaml")
-	if data, err := os.ReadFile(configPath); err == nil {
-		var cfg EventicConfig
-		if err := yaml.Unmarshal(data, &cfg); err == nil {
-			// Global hooks
-			hooks.Pre = cfg.Hooks.Pre
-			hooks.Post = cfg.Hooks.Post
-			hooks.Notify = cfg.Hooks.Notify
-			hooks.NotifyOn = cfg.Hooks.NotifyOn
-
-			// Event-specific hooks: check "event.action" first, then "event"
-			eventHooks := resolveEventHooks(cfg.Events, event.GitHubEvent, event.Action)
-			hooks.EventPre = eventHooks.Pre
-			hooks.EventPost = eventHooks.Post
-			hooks.EventNotify = eventHooks.Notify
-			hooks.EventNotifyOn = eventHooks.NotifyOn
-
-			log.Debug().
-				Str("config", configPath).
-				Str("event", event.GitHubEvent).
-				Str("action", event.Action).
-				Bool("has_event_hook", hooks.EventPre != "" || hooks.EventPost != "" || hooks.EventNotify != "").
-				Msg("using .eventic.yaml")
-			return hooks
-		}
-	}
-
-	// Fallback: .deploy/deploy.yml as a post hook for push events
-	deployPath := filepath.Join(repoPath, ".deploy", "deploy.yml")
-	if _, err := os.Stat(deployPath); err == nil {
-		hooks.Post = fmt.Sprintf("bruce install %s", deployPath)
-		log.Debug().Str("manifest", deployPath).Msg("using bruce manifest")
-		return hooks
-	}
-
-	// Fallback: client-level global hooks
-	if globalPre != "" || globalPost != "" || globalNotify != "" {
-		hooks.Pre = globalPre
-		hooks.Post = globalPost
-		hooks.Notify = globalNotify
-		hooks.NotifyOn = globalNotifyOn
-		log.Debug().
-			Str("repo", repoPath).
-			Bool("has_pre", globalPre != "").
-			Bool("has_post", globalPost != "").
-			Bool("has_notify", globalNotify != "").
-			Msg("using client global hooks")
-		return hooks
-	}
-
-	log.Debug().Str("repo", repoPath).Msg("no hooks configured")
-	return hooks
-}
-
-// resolveEventHooks looks up event-specific hooks with action specificity.
-// Lookup order: "event.action" (most specific) -> "event" (fallback).
-func resolveEventHooks(events map[string]EventHooks, eventType, action string) EventHooks {
-	if events == nil {
-		return EventHooks{}
-	}
-
-	// Most specific: event.action (e.g., "pull_request.opened")
-	if action != "" {
-		key := eventType + "." + action
-		if h, ok := events[key]; ok {
-			log.Debug().Str("key", key).Msg("matched event.action hook")
-			return h
-		}
-	}
-
-	// Fallback: event type only (e.g., "push")
-	if h, ok := events[eventType]; ok {
-		log.Debug().Str("key", eventType).Msg("matched event hook")
-		return h
-	}
-
-	return EventHooks{}
 }
 
 // matchesIgnorePattern checks whether a GitHub event (type + action) matches
@@ -203,29 +87,35 @@ func eventLabel(event protocol.EventMsg) string {
 	return event.GitHubEvent
 }
 
-// RunHook executes a hook command in the repo directory.
-func RunHook(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) error {
-	_, err := RunHookWithOutput(ctx, repoPath, hook, hookLabel, event)
-	return err
-}
-
-// RunHookWithOutput executes a hook and returns its combined output.
-func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) (string, error) {
-	log.Info().Msgf("Event %s on %s: running %s", eventLabel(event), event.Repo, hookLabel)
-	log.Debug().Str("hook", hook).Str("dir", repoPath).Msg("hook command detail")
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", hook)
-	cmd.Dir = repoPath
-	cmd.Env = append(os.Environ(),
+// buildHookEnv assembles the environment passed to every command executed for an
+// event. It starts from the process environment, layers the standard EVENTIC_*
+// event variables, then appends any extra "NAME=value" entries (e.g. captured
+// DAG variables or the per-run context dir). It is shared by RunHookWithOutput
+// and the DAG node runner so both expose an identical contract.
+func buildHookEnv(repoPath string, event protocol.EventMsg, extra ...string) []string {
+	env := append(os.Environ(),
 		"EVENTIC_REPO="+event.Repo,
 		"EVENTIC_REPOS="+reposRootForHook(repoPath, event.Repo),
 		"EVENTIC_REF="+event.Ref,
 		"EVENTIC_EVENT="+event.GitHubEvent,
 		"EVENTIC_ACTION="+event.Action,
 		"EVENTIC_SENDER="+event.Sender,
+		"EVENTIC_MESSAGE="+event.Message,
 		fmt.Sprintf("EVENTIC_PR_NUMBER=%d", event.PRNumber),
 		"EVENTIC_DELIVERY_ID="+event.DeliveryID,
 	)
+	return append(env, extra...)
+}
+
+// RunHookWithOutput executes a single shell command in the repo directory with
+// the standard EVENTIC_* environment and returns its trimmed combined output.
+func RunHookWithOutput(ctx context.Context, repoPath, hook, hookLabel string, event protocol.EventMsg) (string, error) {
+	log.Info().Msgf("Event %s on %s: running %s", eventLabel(event), event.Repo, hookLabel)
+	log.Debug().Str("hook", hook).Str("dir", repoPath).Msg("hook command detail")
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", hook)
+	cmd.Dir = repoPath
+	cmd.Env = buildHookEnv(repoPath, event)
 
 	out, err := cmd.CombinedOutput()
 	outStr := strings.TrimSpace(string(out))

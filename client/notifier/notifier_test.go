@@ -22,7 +22,7 @@ type mockNotifier struct {
 }
 
 func (m *mockNotifier) Name() string         { return m.name }
-func (m *mockNotifier) GetMetrics() *Metrics  { return nil }
+func (m *mockNotifier) GetMetrics() *Metrics { return nil }
 func (m *mockNotifier) Ping(ctx context.Context) error {
 	return m.pingErr
 }

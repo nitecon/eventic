@@ -124,9 +124,9 @@ All notifications have access to the following fields in their `Message` templat
 | `{{.Repo}}` | Repository name (org/repo) |
 | `{{.Event}}` | GitHub event type (push, pull_request, etc.) |
 | `{{.Action}}` | Action (opened, synchronize, etc.) |
-| `{{.HookName}}` | The label of the hook that triggered the notification |
-| `{{.Message}}` | The raw message string from the hook config |
-| `{{.Stdout}}` | The standard output of the executed hook |
+| `{{.HookName}}` | The label of the source that triggered the notification (e.g. `workflow:summary` for run-completion) |
+| `{{.Message}}` | The raw message template string being rendered |
+| `{{.Stdout}}` | The combined output of the workflow run's last node |
 | `{{.Sender}}` | The GitHub user who triggered the event |
 | `{{.State}}` | Execution state (success or failure) |
 | `{{.PayloadField "key.path"}}` | Extract any field from the raw GitHub webhook payload |

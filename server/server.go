@@ -9,21 +9,28 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/coder/websocket"
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
-	"github.com/coder/websocket"
 )
 
 type Config struct {
 	WebhookSecret string
 	ClientTokens  map[string]bool
+	CommsTokens   map[string]bool
 	ListenAddr    string
 }
+
+// maxCommsMessageBytes bounds the message field of a /event/comms request to
+// keep a single injection from broadcasting an unbounded payload to all clients.
+const maxCommsMessageBytes = 1 << 20 // 1 MiB
 
 func Start(cfg Config) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/github", webhookHandler(cfg))
+	mux.HandleFunc("/event/comms", commsHandler(cfg))
 	mux.HandleFunc("/ws", wsHandler(cfg))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -76,6 +83,104 @@ func webhookHandler(cfg Config) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"accepted"}`))
 	}
+}
+
+// commsHandler accepts free-form agent "comms" events over an authenticated
+// HTTP POST and injects them into the shared EventChannel for delivery to
+// matching clients, mirroring the GitHub webhook ingress path.
+//
+// Auth: an Authorization: Bearer <token> header is validated against
+// cfg.CommsTokens; if that set is empty it falls back to cfg.ClientTokens.
+func commsHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if !validateCommsToken(cfg, r.Header.Get("Authorization")) {
+			log.Warn().Msg("invalid comms token")
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		var req struct {
+			Repo     string `json:"repo"`
+			Ref      string `json:"ref"`
+			Message  string `json:"message"`
+			Sender   string `json:"sender"`
+			CloneURL string `json:"clone_url"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "parse error", http.StatusBadRequest)
+			return
+		}
+
+		if req.Repo == "" || req.Message == "" {
+			http.Error(w, "repo and message are required", http.StatusBadRequest)
+			return
+		}
+
+		// Bound the message so a single comms request can't fan a huge payload
+		// out to every subscribed client over WebSocket.
+		if len(req.Message) > maxCommsMessageBytes {
+			http.Error(w, "message exceeds maximum size", http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		cloneURL := req.CloneURL
+		if cloneURL == "" {
+			cloneURL = "https://github.com/" + req.Repo + ".git"
+		}
+
+		event := protocol.EventMsg{
+			MsgType:     "Event",
+			DeliveryID:  fmt.Sprintf("comms-%d", time.Now().UnixNano()),
+			GitHubEvent: "comms",
+			Repo:        req.Repo,
+			Ref:         req.Ref,
+			Sender:      req.Sender,
+			Message:     req.Message,
+			CloneURL:    cloneURL,
+			Payload:     json.RawMessage(body),
+		}
+
+		log.Info().
+			Str("event", "comms").
+			Str("repo", event.Repo).
+			Str("ref", event.Ref).
+			Str("delivery", event.DeliveryID).
+			Msg("comms event received")
+
+		EventChannel <- event
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"accepted"}`))
+	}
+}
+
+// validateCommsToken validates an Authorization header value of the form
+// "Bearer <token>" against cfg.CommsTokens, falling back to cfg.ClientTokens
+// when no dedicated comms tokens are configured.
+func validateCommsToken(cfg Config, authHeader string) bool {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authHeader, prefix) {
+		return false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(authHeader, prefix))
+	if token == "" {
+		return false
+	}
+	if len(cfg.CommsTokens) > 0 {
+		return cfg.CommsTokens[token]
+	}
+	return cfg.ClientTokens[token]
 }
 
 func validateHMAC(payload []byte, signature string, secret []byte) bool {

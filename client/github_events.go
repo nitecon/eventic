@@ -2,10 +2,8 @@ package client
 
 // GitHubWebhookEvents maps each GitHub webhook event type to its known action
 // values. Events with an empty slice have no action field. This reference is
-// provided for users configuring global-ignore-pre / global-ignore-post and
-// global-allowed-pre / global-allowed-post patterns; it is NOT used for runtime
-// validation since GitHub may add new
-// events or actions at any time.
+// provided for the workflow editor's event-type dropdowns; it is NOT used for
+// runtime validation since GitHub may add new events or actions at any time.
 //
 // Source: https://docs.github.com/en/webhooks/webhook-events-and-payloads
 var GitHubWebhookEvents = map[string][]string{
@@ -80,6 +78,6 @@ var GitHubWebhookEvents = map[string][]string{
 	"team_add":                        {},
 	"watch":                           {"started"},
 	"workflow_dispatch":               {},
-	"workflow_job":                     {"completed", "in_progress", "queued", "waiting"},
-	"workflow_run":                     {"completed", "in_progress", "requested"},
+	"workflow_job":                    {"completed", "in_progress", "queued", "waiting"},
+	"workflow_run":                    {"completed", "in_progress", "requested"},
 }

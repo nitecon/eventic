@@ -51,12 +51,12 @@ func init() {
 		}
 
 		return &DiscordBotNotifier{
-			session:       dg,
-			GuildID:       guildID,
-			CategoryID:    categoryID,
-			ChannelID:     channelID,
+			session:         dg,
+			GuildID:         guildID,
+			CategoryID:      categoryID,
+			ChannelID:       channelID,
 			NotifyChannelID: notifyChannelID,
-			channelCache:  &sync.Map{},
+			channelCache:    &sync.Map{},
 		}, nil
 	})
 }
@@ -66,7 +66,7 @@ type DiscordWebhookNotifier struct {
 	WebhookURL string
 }
 
-func (n *DiscordWebhookNotifier) Name() string { return "discord-webhook" }
+func (n *DiscordWebhookNotifier) Name() string         { return "discord-webhook" }
 func (n *DiscordWebhookNotifier) GetMetrics() *Metrics { return nil }
 
 func (n *DiscordWebhookNotifier) Ping(ctx context.Context) error {
@@ -140,16 +140,16 @@ func (n *DiscordWebhookNotifier) Notify(ctx context.Context, notification Notifi
 // DiscordBotNotifier sends notifications using a native Discord Bot.
 // The session is created once and reused. Channel IDs are cached per repo slug.
 type DiscordBotNotifier struct {
-	session       *discordgo.Session
-	GuildID       string
-	CategoryID    string
-	ChannelID     string
-	NotifyChannelID string // dedicated channel ID to route all notifications to
-	channelCache  *sync.Map // slug -> channelID
+	session         *discordgo.Session
+	GuildID         string
+	CategoryID      string
+	ChannelID       string
+	NotifyChannelID string    // dedicated channel ID to route all notifications to
+	channelCache    *sync.Map // slug -> channelID
 }
 
 func (n *DiscordBotNotifier) Name() string         { return "discord-bot" }
-func (n *DiscordBotNotifier) GetMetrics() *Metrics  { return nil }
+func (n *DiscordBotNotifier) GetMetrics() *Metrics { return nil }
 
 func (n *DiscordBotNotifier) Ping(ctx context.Context) error {
 	_, err := n.session.User("@me")

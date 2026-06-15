@@ -78,35 +78,43 @@ func TestEventsHandlerReturnsJSON(t *testing.T) {
 	}
 }
 
-func TestWebIndexIncludesActiveAndExistingProjectSections(t *testing.T) {
+func TestIndexHandlerServesPlaceholderShell(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 
-	webIndexHandler(rec, req)
+	indexHandler(WebConfig{}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
 	for _, expected := range []string{
-		"Active Projects",
-		"Existing Projects",
-		`id="active-projects"`,
-		`id="existing-projects"`,
-		`id="project-search"`,
-		"Event Queue",
-		`id="event-queue"`,
-		`id="replay-event"`,
-		`id="replay-ref"`,
-		`id="replay-trigger"`,
-		`fetch("/replay"`,
-		`fetch("/replay/refs?repo="`,
-		`fetch("/projects")`,
-		`function refreshSnapshot()`,
+		"Eventic workflow console",
+		"static_dir",
+		`name="endpoint:workflows"`,
+		`name="endpoint:runs-ws"`,
+		"ndesign-cdn/ndesign/latest/",
 	} {
 		if !strings.Contains(body, expected) {
-			t.Fatalf("expected index body to contain %q", expected)
+			t.Fatalf("expected shell body to contain %q", expected)
 		}
+	}
+}
+
+func TestIndexHandlerServesStaticDir(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "index.html"), "<html><body>custom ndesign shell</body></html>")
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	indexHandler(WebConfig{StaticDir: dir}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "custom ndesign shell") {
+		t.Fatalf("expected static index served, got %q", rec.Body.String())
 	}
 }
 
@@ -131,19 +139,16 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	}
 	store.StartProject(ctx, event)
 	store.UpdateGitState(ctx, "nitecon/eventic", "main", "abc123")
-	var cfg Config
-	cfg.GlobalHooks.Post = "echo ok"
-	store.SyncConfiguredEvents(ctx, "nitecon/eventic", "", cfg)
 	store.UpdateOutput(ctx, "nitecon/eventic", protocol.EventMsg{
 		DeliveryID:  "delivery-1",
 		GitHubEvent: "push",
 		Repo:        "nitecon/eventic",
 	}, "global:post", "success", "build ok")
 
-	req := httptest.NewRequest(http.MethodGet, "/projects/nitecon/eventic", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/nitecon/eventic", nil)
 	rec := httptest.NewRecorder()
 
-	projectsHandler(store).ServeHTTP(rec, req)
+	apiProjectsHandler(store).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
@@ -165,15 +170,6 @@ func TestProjectsHandlerReturnsProjectByRepo(t *testing.T) {
 	if len(project.RecentEvents) != 0 {
 		t.Fatalf("expected project detail to omit recent raw events, got %d", len(project.RecentEvents))
 	}
-	if len(project.ConfiguredEvents) != 1 {
-		t.Fatalf("expected 1 configured event, got %d", len(project.ConfiguredEvents))
-	}
-	if project.ConfiguredEvents[0].EventKey != "global:post" {
-		t.Fatalf("unexpected configured event key: %q", project.ConfiguredEvents[0].EventKey)
-	}
-	if project.ConfiguredEvents[0].LatestOutput != "build ok" {
-		t.Fatalf("unexpected configured event output: %q", project.ConfiguredEvents[0].LatestOutput)
-	}
 }
 
 func TestReplayRefsHandlerReturnsBranchesAndTags(t *testing.T) {
@@ -191,10 +187,10 @@ func TestReplayRefsHandlerReturnsBranchesAndTags(t *testing.T) {
 	runGit(t, repoPath, "branch", "feature/replay")
 	runGit(t, repoPath, "tag", "v1.0.0")
 
-	req := httptest.NewRequest(http.MethodGet, "/replay/refs?repo=nitecon/traderx", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/refs?repo=nitecon/traderx", nil)
 	rec := httptest.NewRecorder()
 
-	replayRefsHandler(Config{ReposDir: reposDir}).ServeHTTP(rec, req)
+	apiRefsHandler(Config{ReposDir: reposDir}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
@@ -215,38 +211,19 @@ func TestReplayRefsHandlerReturnsBranchesAndTags(t *testing.T) {
 	}
 }
 
-func TestReplayHandlerBuildsPushEventFromConfiguredGlobal(t *testing.T) {
-	ctx := t.Context()
-	store, err := OpenProjectStore(ctx, StateConfig{
-		Enabled: true,
-		Path:    t.TempDir() + "/eventic.db",
-	})
+func TestTriggerRunDispatchesEventWithMessage(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
 	if err != nil {
-		t.Fatalf("open project store: %v", err)
+		t.Fatalf("open memory store: %v", err)
 	}
 	defer store.Close()
 
-	started := ExecutionEvent{
-		DeliveryID: "delivery-1",
-		Repo:       "nitecon/traderx",
-		Ref:        "refs/heads/main",
-		Event:      "workflow_run",
-		Action:     "completed",
-		State:      "success",
-		StartedAt:  testTime(),
-		UpdatedAt:  testTime(),
-	}
-	store.StartProject(ctx, started)
-	var cfg Config
-	cfg.GlobalHooks.Post = "echo global"
-	store.SyncConfiguredEvents(ctx, "nitecon/traderx", "", cfg)
-
 	events := make(chan protocol.EventMsg, 1)
-	body := bytes.NewBufferString(`{"repo":"nitecon/traderx","event_key":"push","ref":"refs/tags/v1.0.0"}`)
-	req := httptest.NewRequest(http.MethodPost, "/replay", body)
+	body := bytes.NewBufferString(`{"repo":"nitecon/traderx","event_type":"comms","ref":"refs/heads/main","message":"assess this"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/runs", body)
 	rec := httptest.NewRecorder()
 
-	replayHandler(store, func(ctx context.Context, event protocol.EventMsg) {
+	runsCollectionHandler(store, func(ctx context.Context, event protocol.EventMsg) {
 		events <- event
 	}).ServeHTTP(rec, req)
 
@@ -257,71 +234,225 @@ func TestReplayHandlerBuildsPushEventFromConfiguredGlobal(t *testing.T) {
 	if event.Repo != "nitecon/traderx" {
 		t.Fatalf("unexpected repo: %q", event.Repo)
 	}
-	if event.GitHubEvent != "push" || event.Action != "" {
-		t.Fatalf("expected push event, got %s.%s", event.GitHubEvent, event.Action)
+	if event.GitHubEvent != "comms" || event.Action != "" {
+		t.Fatalf("expected comms event, got %s.%s", event.GitHubEvent, event.Action)
 	}
-	if event.Ref != "refs/tags/v1.0.0" {
+	if event.Ref != "refs/heads/main" {
 		t.Fatalf("unexpected ref: %q", event.Ref)
+	}
+	if event.Message != "assess this" {
+		t.Fatalf("expected message passthrough, got %q", event.Message)
 	}
 	if event.Sender != "eventic-web" {
 		t.Fatalf("unexpected sender: %q", event.Sender)
+	}
+	if event.CloneURL != "https://github.com/nitecon/traderx.git" {
+		t.Fatalf("unexpected clone url: %q", event.CloneURL)
 	}
 	if !strings.HasPrefix(event.DeliveryID, "manual-") {
 		t.Fatalf("expected manual delivery id, got %q", event.DeliveryID)
 	}
 }
 
-func TestConfiguredGlobalHookSlotsCaptureOutputAndSkippedNotify(t *testing.T) {
-	ctx := t.Context()
-	store, err := OpenProjectStore(ctx, StateConfig{
-		Enabled: true,
-		Path:    t.TempDir() + "/eventic.db",
-	})
+func TestTriggerRunRejectsMissingFields(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
 	if err != nil {
-		t.Fatalf("open project store: %v", err)
+		t.Fatalf("open memory store: %v", err)
 	}
 	defer store.Close()
 
-	event := protocol.EventMsg{
-		DeliveryID:  "delivery-1",
-		GitHubEvent: "check_suite",
-		Action:      "completed",
-		Repo:        "nitecon/eventic",
-		Ref:         "HEAD",
+	body := bytes.NewBufferString(`{"repo":"nitecon/traderx"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/runs", body)
+	rec := httptest.NewRecorder()
+
+	runsCollectionHandler(store, func(context.Context, protocol.EventMsg) {}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
-	store.UpsertManagedProject(ctx, "nitecon/eventic", "HEAD", "abc123")
-	var cfg Config
-	cfg.GlobalHooks.Pre = "echo preparing"
-	cfg.GlobalHooks.Post = "echo done"
-	cfg.GlobalHooks.Notify = "Global hook {{.State}}"
-	store.SyncConfiguredEvents(ctx, "nitecon/eventic", "", cfg)
+	errs := decodeEnvelope(t, rec)
+	if errs["event_type"] == "" || errs["ref"] == "" {
+		t.Fatalf("expected event_type and ref field errors, got %#v", errs)
+	}
+}
 
-	store.StartConfiguredEvent(ctx, "nitecon/eventic", event, "global:pre")
-	store.UpdateConfiguredEvent(ctx, "nitecon/eventic", event, "global:pre", "success", "preparing nitecon/eventic", "")
-	store.StartConfiguredEvent(ctx, "nitecon/eventic", event, "global:post")
-	store.UpdateConfiguredEvent(ctx, "nitecon/eventic", event, "global:post", "success", "done", "")
-	store.UpdateConfiguredEvent(ctx, "nitecon/eventic", event, "global:summary", "skipped", "Skipped by notify_on filter.", "")
-
-	project, err := store.GetProject(ctx, "nitecon/eventic")
+func TestWorkflowCRUDLifecycle(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
 	if err != nil {
-		t.Fatalf("get project: %v", err)
+		t.Fatalf("open memory store: %v", err)
 	}
-	events := map[string]ConfiguredEvent{}
-	for _, event := range project.ConfiguredEvents {
-		events[event.EventKey] = event
+	defer store.Close()
+
+	collection := workflowsCollectionHandler(store)
+	item := workflowItemHandler(store)
+
+	// Create a valid two-node workflow.
+	createBody := `{
+		"scope":"repo","repo":"nitecon/eventic","event_type":"push","name":"ci","enabled":true,
+		"nodes":[
+			{"node_key":"a","name":"step a","type":"command","command":"echo a"},
+			{"node_key":"b","name":"step b","type":"command","command":"echo b"}
+		],
+		"edges":[{"from_node":"a","to_node":"b","condition":"success"}]
+	}`
+	rec := httptest.NewRecorder()
+	collection.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(createBody)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	for key, expected := range map[string]string{
-		"global:pre":    "preparing nitecon/eventic",
-		"global:post":   "done",
-		"global:notify": "Skipped by notify_on filter.",
-	} {
-		if events[key].LatestOutput != expected {
-			t.Fatalf("expected %s output %q, got %#v", key, expected, events[key])
+	var created Workflow
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create decode: %v", err)
+	}
+	if created.ID == 0 {
+		t.Fatal("expected created workflow to carry an id")
+	}
+	if len(created.Nodes) != 2 || len(created.Edges) != 1 {
+		t.Fatalf("expected 2 nodes / 1 edge, got %d / %d", len(created.Nodes), len(created.Edges))
+	}
+
+	path := fmt.Sprintf("/api/workflows/%d", created.ID)
+
+	// Get the workflow back.
+	rec = httptest.NewRecorder()
+	item.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: expected 200, got %d", rec.Code)
+	}
+
+	// List should include it.
+	rec = httptest.NewRecorder()
+	collection.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workflows?scope=repo&repo=nitecon/eventic", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: expected 200, got %d", rec.Code)
+	}
+	var listed []Workflow
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("list decode: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("expected listed workflow %d, got %#v", created.ID, listed)
+	}
+
+	// Update with a cycle → expect a graph-level error envelope.
+	cycleBody := `{
+		"scope":"repo","repo":"nitecon/eventic","event_type":"push","name":"ci","enabled":true,
+		"nodes":[
+			{"node_key":"a","name":"a","type":"command","command":"echo a"},
+			{"node_key":"b","name":"b","type":"command","command":"echo b"}
+		],
+		"edges":[
+			{"from_node":"a","to_node":"b","condition":"always"},
+			{"from_node":"b","to_node":"a","condition":"always"}
+		]
+	}`
+	rec = httptest.NewRecorder()
+	item.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, strings.NewReader(cycleBody)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("cycle update: expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	errs := decodeEnvelope(t, rec)
+	if !strings.Contains(errs["error"], "cycle") {
+		t.Fatalf("expected cycle error, got %#v", errs)
+	}
+
+	// Delete the workflow.
+	rec = httptest.NewRecorder()
+	item.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: expected 200, got %d", rec.Code)
+	}
+
+	// Subsequent get should 404 with an envelope.
+	rec = httptest.NewRecorder()
+	item.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestWorkflowCreateRejectsMissingName(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
+	defer store.Close()
+
+	body := `{"scope":"repo","repo":"nitecon/eventic","event_type":"push","name":""}`
+	rec := httptest.NewRecorder()
+	workflowsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(body)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d", rec.Code)
+	}
+	if decodeEnvelope(t, rec)["name"] == "" {
+		t.Fatal("expected a name field error")
+	}
+}
+
+func TestWorkflowItemRejectsBadID(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
+	defer store.Close()
+
+	rec := httptest.NewRecorder()
+	workflowItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workflows/not-a-number", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if decodeEnvelope(t, rec)["id"] == "" {
+		t.Fatal("expected an id field error in the envelope")
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("expected json content type, got %q", ct)
+	}
+}
+
+func TestEventTypesHandlerIncludesComms(t *testing.T) {
+	rec := httptest.NewRecorder()
+	eventTypesHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/event-types", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var types []struct {
+		Event   string   `json:"event"`
+		Actions []string `json:"actions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &types); err != nil {
+		t.Fatalf("decode event types: %v", err)
+	}
+	var hasComms, hasPush bool
+	for i, et := range types {
+		if i > 0 && types[i-1].Event > et.Event {
+			t.Fatalf("event types not sorted: %q before %q", types[i-1].Event, et.Event)
+		}
+		if et.Event == "comms" {
+			hasComms = true
+		}
+		if et.Event == "push" {
+			hasPush = true
 		}
 	}
-	if events["global:notify"].State != "skipped" {
-		t.Fatalf("expected global notify skipped, got %q", events["global:notify"].State)
+	if !hasComms {
+		t.Fatal("expected comms in event types")
 	}
+	if !hasPush {
+		t.Fatal("expected push in event types")
+	}
+}
+
+// decodeEnvelope extracts the ndesign error map from a recorded response.
+func decodeEnvelope(t *testing.T, rec *httptest.ResponseRecorder) map[string]string {
+	t.Helper()
+	var body struct {
+		Errors map[string]string `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error envelope: %v (body=%s)", err, rec.Body.String())
+	}
+	return body.Errors
 }
 
 func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
@@ -337,14 +468,11 @@ func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
 
 	store.UpsertManagedProject(ctx, "nitecon/eventic", "main", "abc123")
 	store.UpsertManagedProject(ctx, "nitecon/another", "main", "def456")
-	var cfg Config
-	cfg.GlobalHooks.Post = "echo configured"
-	store.SyncConfiguredEvents(ctx, "nitecon/eventic", "", cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 	rec := httptest.NewRecorder()
 
-	projectsHandler(store).ServeHTTP(rec, req)
+	apiProjectsHandler(store).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
@@ -387,71 +515,6 @@ func TestRunHookWithOutputExposesReposDir(t *testing.T) {
 	expected := filepath.Join(reposDir, "nitecon", "eventic")
 	if out != expected {
 		t.Fatalf("expected EVENTIC_REPOS/EVENTIC_REPO %q, got %q", expected, out)
-	}
-}
-
-func TestSyncConfiguredEventsPrunesClientGlobalFallbackWhenRepoConfigExists(t *testing.T) {
-	ctx := t.Context()
-	reposDir := t.TempDir()
-	repoPath := filepath.Join(reposDir, "nitecon", "volumetric")
-	if err := os.MkdirAll(repoPath, 0755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-	writeFile(t, filepath.Join(repoPath, ".eventic.yaml"), `
-hooks:
-  pre: "echo repo pre"
-events:
-  push:
-    post: "echo push post"
-    notify: "deployed"
-`)
-
-	store, err := OpenProjectStore(ctx, StateConfig{
-		Enabled: true,
-		Path:    t.TempDir() + "/eventic.db",
-	})
-	if err != nil {
-		t.Fatalf("open project store: %v", err)
-	}
-	defer store.Close()
-
-	store.UpsertManagedProject(ctx, "nitecon/volumetric", "main", "abc123")
-	var cfg Config
-	cfg.GlobalHooks.Pre = "echo global pre"
-	cfg.GlobalHooks.Post = "echo global post"
-	cfg.GlobalHooks.Notify = "global notify"
-
-	store.SyncConfiguredEvents(ctx, "nitecon/volumetric", "", cfg)
-	events, err := store.ListConfiguredEvents(ctx, "nitecon/volumetric")
-	if err != nil {
-		t.Fatalf("list initial configured events: %v", err)
-	}
-	if len(events) != 3 {
-		t.Fatalf("expected initial client-global fallback slots, got %#v", events)
-	}
-
-	store.SyncConfiguredEvents(ctx, "nitecon/volumetric", repoPath, cfg)
-	events, err = store.ListConfiguredEvents(ctx, "nitecon/volumetric")
-	if err != nil {
-		t.Fatalf("list configured events: %v", err)
-	}
-	seen := map[string]string{}
-	for _, event := range events {
-		seen[event.EventKey] = event.Source
-	}
-	for _, key := range []string{"global:post", "global:notify"} {
-		if _, ok := seen[key]; ok {
-			t.Fatalf("did not expect unreachable client-global slot %q in %#v", key, events)
-		}
-	}
-	for key, source := range map[string]string{
-		"global:pre":  ".eventic.yaml",
-		"push:post":   ".eventic.yaml",
-		"push:notify": ".eventic.yaml",
-	} {
-		if seen[key] != source {
-			t.Fatalf("expected configured event %q from %q in %#v", key, source, events)
-		}
 	}
 }
 
@@ -500,7 +563,7 @@ func TestProjectStoreRetainsLastFiveEventsPerRepo(t *testing.T) {
 	}
 }
 
-func TestSeedFromReposDirAddsDiskReposAndConfiguredEvents(t *testing.T) {
+func TestSeedFromReposDirAddsDiskRepos(t *testing.T) {
 	ctx := t.Context()
 	reposDir := t.TempDir()
 	repoPath := filepath.Join(reposDir, "nitecon", "eventic")
@@ -508,13 +571,6 @@ func TestSeedFromReposDirAddsDiskReposAndConfiguredEvents(t *testing.T) {
 		t.Fatalf("mkdir repo: %v", err)
 	}
 	writeFile(t, filepath.Join(repoPath, "README.md"), "# test\n")
-	writeFile(t, filepath.Join(repoPath, ".eventic.yaml"), `
-hooks:
-  pre: "echo repo pre"
-events:
-  push:
-    post: "echo push post"
-`)
 	runGit(t, repoPath, "init")
 	runGit(t, repoPath, "config", "user.email", "eventic@example.com")
 	runGit(t, repoPath, "config", "user.name", "Eventic Test")
@@ -530,9 +586,7 @@ events:
 	}
 	defer store.Close()
 
-	var cfg Config
-	cfg.GlobalHooks.Post = "echo global post"
-	store.SeedFromReposDir(ctx, reposDir, cfg)
+	store.SeedFromReposDir(ctx, reposDir, Config{})
 
 	projects, err := store.ListProjects(ctx)
 	if err != nil {
@@ -551,19 +605,6 @@ events:
 	}
 	if project.Hash == "" {
 		t.Fatal("expected seeded project hash")
-	}
-
-	keys := map[string]bool{}
-	for _, event := range project.ConfiguredEvents {
-		keys[event.EventKey] = true
-	}
-	for _, key := range []string{"global:pre", "push:post"} {
-		if !keys[key] {
-			t.Fatalf("expected configured event %q in %#v", key, project.ConfiguredEvents)
-		}
-	}
-	if keys["global:post"] {
-		t.Fatalf("did not expect client-global fallback event in repo-configured project: %#v", project.ConfiguredEvents)
 	}
 }
 
