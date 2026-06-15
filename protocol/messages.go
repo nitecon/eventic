@@ -36,6 +36,7 @@ type EventMsg struct {
 	Ref         string          `json:"Ref,omitempty"`
 	Action      string          `json:"Action,omitempty"`
 	Sender      string          `json:"Sender,omitempty"`
+	Message     string          `json:"Message,omitempty"`
 	CloneURL    string          `json:"CloneURL"`
 	PRNumber    int             `json:"PRNumber,omitempty"`
 	Payload     json.RawMessage `json:"Payload"`

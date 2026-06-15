@@ -75,14 +75,19 @@ if [ ! -f "$CONFIG_FILE" ]; then
 
 relay: "wss://your-server/ws"
 token: "your-auth-token"
-client_id: "build-server-01"
+client_id: "eventic-client-01"
 repos_dir: "/opt/eventic/repos"
 subscribe:
   - "yourorg/*"
 auto-update: true
-# global-hooks:
-#   pre: "echo preparing ${EVENTIC_REPO}..."
-#   post: "echo done with ${EVENTIC_REPO}"
+# Workflows are authored from the dashboard/API, not this file.
+# Enable persistent state + the local console to manage them:
+# state:
+#   enabled: true
+#   path: "/opt/eventic/state/eventic.db"
+# web:
+#   enabled: true
+#   listen: "127.0.0.1:16384"
 EOF
   chown root:eventic "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE"

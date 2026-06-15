@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -16,32 +18,23 @@ import (
 var repoLocks = NewRepoLocks()
 
 type Config struct {
-	Relay       string   `yaml:"relay"`
-	Token       string   `yaml:"token"`
-	ClientID    string   `yaml:"client_id"`
-	ReposDir    string   `yaml:"repos_dir"`
-	Subscribe   []string `yaml:"subscribe"`
-	AutoUpdate  bool     `yaml:"auto-update"`
-	AutoCheck   *bool    `yaml:"auto-check"`
-	MaxWorkers  int      `yaml:"max-workers"`
-	LogLevel    string   `yaml:"log-level"`
-	GlobalHooks struct {
-		Pre      string   `yaml:"pre"`
-		Post     string   `yaml:"post"`
-		Notify   string   `yaml:"notify"`
-		NotifyOn []string `yaml:"notify_on"`
-	} `yaml:"global-hooks"`
-	GlobalIgnorePre   []string        `yaml:"global-ignore-pre"`
-	GlobalIgnorePost  []string        `yaml:"global-ignore-post"`
-	GlobalAllowedPre  []string        `yaml:"global-allowed-pre"`
-	GlobalAllowedPost []string        `yaml:"global-allowed-post"`
-	DefaultNotify     string          `yaml:"default-notify"`
-	DefaultNotifyOn   []string        `yaml:"default-notify-on"`
-	Notifier          notifier.Config `yaml:"notifier"`
-	RequireApproval   bool            `yaml:"require_approval"`
-	ApprovalsPath     string          `yaml:"approvals_path"`
-	Web               WebConfig       `yaml:"web"`
-	State             StateConfig     `yaml:"state"`
+	Relay           string          `yaml:"relay"`
+	Token           string          `yaml:"token"`
+	ClientID        string          `yaml:"client_id"`
+	ReposDir        string          `yaml:"repos_dir"`
+	Subscribe       []string        `yaml:"subscribe"`
+	AutoUpdate      bool            `yaml:"auto-update"`
+	AutoCheck       *bool           `yaml:"auto-check"`
+	MaxWorkers      int             `yaml:"max-workers"`
+	MaxNodeWorkers  int             `yaml:"max-node-workers"`
+	LogLevel        string          `yaml:"log-level"`
+	DefaultNotify   string          `yaml:"default-notify"`
+	DefaultNotifyOn []string        `yaml:"default-notify-on"`
+	Notifier        notifier.Config `yaml:"notifier"`
+	RequireApproval bool            `yaml:"require_approval"`
+	ApprovalsPath   string          `yaml:"approvals_path"`
+	Web             WebConfig       `yaml:"web"`
+	State           StateConfig     `yaml:"state"`
 }
 
 // Run connects to the relay and processes events. Reconnects on failure.
@@ -241,7 +234,6 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 	desc := ""
 	startedEvent := webLog.StartEvent(event)
 	projectStore.StartProject(ctx, startedEvent)
-	projectStore.SyncConfiguredEvents(ctx, event.Repo, "", cfg)
 	defer func() {
 		if finishedEvent := webLog.FinishEvent(event.DeliveryID, state, desc); finishedEvent != nil {
 			projectStore.FinishProject(ctx, *finishedEvent)
@@ -273,158 +265,7 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		return
 	}
 
-	repoPath, err := EnsureRepo(cfg.ReposDir, event.Repo, event.CloneURL)
-	if err != nil {
-		state = "failure"
-		desc = err.Error()
-		log.Error().Err(err).Str("repo", event.Repo).Msg("repo sync failed")
-	} else {
-		projectStore.SyncConfiguredEvents(ctx, event.Repo, repoPath, cfg)
-		hooks := DiscoverHooks(repoPath, event, cfg.GlobalHooks.Pre, cfg.GlobalHooks.Post, cfg.GlobalHooks.Notify, cfg.GlobalHooks.NotifyOn)
-
-		// Apply default notification template as fallback for global notify.
-		if hooks.Notify == "" && cfg.DefaultNotify != "" {
-			hooks.Notify = cfg.DefaultNotify
-			if len(hooks.NotifyOn) == 0 {
-				hooks.NotifyOn = cfg.DefaultNotifyOn
-			}
-		}
-
-		// Execution order:
-		// 1. Global pre hook
-		// 2. Event-specific pre hook
-		// 3. git checkout
-		// 4. Event-specific post hook
-		// 5. Event-specific notify (with post-hook output, filtered by notify_on)
-		// 6. Global post hook
-		// 7. Global notify (final summary, filtered by notify_on)
-
-		hooksExecuted := false
-		var lastOut string
-
-		if hooks.Pre != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPre, cfg.GlobalIgnorePre) {
-			sendStartNotification(ctx, dispatch, "global:pre", event)
-			hooksExecuted = true
-			webLog.StartHook(event.DeliveryID, "global:pre")
-			projectStore.StartConfiguredEvent(ctx, event.Repo, event, "global:pre")
-			if out, err := RunHookWithOutput(ctx, repoPath, hooks.Pre, "global:pre", event); err != nil {
-				state = "failure"
-				desc = err.Error()
-				lastOut = out
-				webLog.FinishHook(event.DeliveryID, "global:pre", "failure", out)
-				projectStore.UpdateOutput(ctx, event.Repo, event, "global:pre", "failure", out)
-			} else {
-				lastOut = out
-				webLog.FinishHook(event.DeliveryID, "global:pre", "success", out)
-				projectStore.UpdateOutput(ctx, event.Repo, event, "global:pre", "success", out)
-			}
-		} else if hooks.Pre != "" {
-			log.Debug().Str("event", eventLabel(event)).Msg("skipping global pre hook (filtered)")
-			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:pre", "skipped", "Skipped by global pre hook filters.", "")
-		}
-
-		if hooks.EventPre != "" {
-			sendStartNotification(ctx, dispatch, "event:pre", event)
-			hooksExecuted = true
-			webLog.StartHook(event.DeliveryID, "event:pre")
-			projectStore.StartConfiguredEvent(ctx, event.Repo, event, "event:pre")
-			if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPre, "event:pre", event); err != nil {
-				state = "failure"
-				desc = err.Error()
-				lastOut = out
-				webLog.FinishHook(event.DeliveryID, "event:pre", "failure", out)
-				projectStore.UpdateOutput(ctx, event.Repo, event, "event:pre", "failure", out)
-			} else {
-				lastOut = out
-				webLog.FinishHook(event.DeliveryID, "event:pre", "success", out)
-				projectStore.UpdateOutput(ctx, event.Repo, event, "event:pre", "success", out)
-			}
-		}
-
-		if err := Checkout(repoPath, event); err != nil {
-			state = "failure"
-			desc = err.Error()
-			log.Error().Err(err).Msgf("Event %s on %s: checkout failed", eventLabel(event), event.Repo)
-		} else {
-			currentRef, currentHash, err := CurrentGitState(repoPath)
-			if err != nil {
-				log.Warn().Err(err).Str("repo", event.Repo).Msg("failed to read current git state")
-			} else {
-				projectStore.UpdateGitState(ctx, event.Repo, currentRef, currentHash)
-			}
-
-			// Event-specific post hook
-			eventPostState := "success"
-			var eventPostOut string
-			if hooks.EventPost != "" {
-				sendStartNotification(ctx, dispatch, "event:post", event)
-				hooksExecuted = true
-				webLog.StartHook(event.DeliveryID, "event:post")
-				projectStore.StartConfiguredEvent(ctx, event.Repo, event, "event:post")
-				if out, err := RunHookWithOutput(ctx, repoPath, hooks.EventPost, "event:post", event); err != nil {
-					state = "failure"
-					desc = err.Error()
-					eventPostState = "failure"
-					eventPostOut = out
-					webLog.FinishHook(event.DeliveryID, "event:post", "failure", out)
-					projectStore.UpdateOutput(ctx, event.Repo, event, "event:post", "failure", out)
-				} else {
-					desc = out
-					eventPostOut = out
-					webLog.FinishHook(event.DeliveryID, "event:post", "success", out)
-					projectStore.UpdateOutput(ctx, event.Repo, event, "event:post", "success", out)
-				}
-			}
-
-			// Event-specific notify (filtered by notify_on, only if hooks ran)
-			if hooksExecuted && hooks.EventNotify != "" && ShouldNotify(hooks.EventNotifyOn, eventPostState) {
-				sendNotification(ctx, dispatch, "event:notify", hooks.EventNotify, eventPostOut, eventPostState, hooks.EventNotifyOn, event)
-				projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "event:notify", "success", "Notification queued.", "")
-			} else if hooks.EventNotify != "" {
-				projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "event:notify", "skipped", "Skipped by notify_on filter.", "")
-			}
-
-			// Global post hook
-			if hooks.Post != "" && shouldRunGlobalHook(event.GitHubEvent, event.Action, cfg.GlobalAllowedPost, cfg.GlobalIgnorePost) {
-				sendStartNotification(ctx, dispatch, "global:post", event)
-				hooksExecuted = true
-				webLog.StartHook(event.DeliveryID, "global:post")
-				projectStore.StartConfiguredEvent(ctx, event.Repo, event, "global:post")
-				if out, err := RunHookWithOutput(ctx, repoPath, hooks.Post, "global:post", event); err != nil {
-					if state == "success" {
-						state = "failure"
-						desc = err.Error()
-					}
-					lastOut = out
-					webLog.FinishHook(event.DeliveryID, "global:post", "failure", out)
-					projectStore.UpdateOutput(ctx, event.Repo, event, "global:post", "failure", out)
-				} else if desc == "" {
-					desc = out
-					lastOut = out
-					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
-					projectStore.UpdateOutput(ctx, event.Repo, event, "global:post", "success", out)
-				} else {
-					lastOut = out
-					webLog.FinishHook(event.DeliveryID, "global:post", "success", out)
-					projectStore.UpdateOutput(ctx, event.Repo, event, "global:post", "success", out)
-				}
-			} else if hooks.Post != "" {
-				log.Debug().Str("event", eventLabel(event)).Msg("skipping global post hook (filtered)")
-				projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:post", "skipped", "Skipped by global post hook filters.", "")
-			}
-		}
-
-		// Global notify (filtered by notify_on, only if hooks ran)
-		if hooksExecuted && hooks.Notify != "" && ShouldNotify(hooks.NotifyOn, state) {
-			sendNotification(ctx, dispatch, "global:summary", hooks.Notify, lastOut, state, hooks.NotifyOn, event)
-			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:summary", "success", "Notification queued.", "")
-		} else if hooksExecuted && hooks.Notify != "" {
-			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:summary", "skipped", "Skipped by notify_on filter.", "")
-		} else if !hooksExecuted && hooks.Notify != "" {
-			log.Debug().Str("event", eventLabel(event)).Msg("skipping notification (no hooks executed)")
-			projectStore.UpdateConfiguredEvent(ctx, event.Repo, event, "global:summary", "skipped", "Skipped because no hooks executed.", "")
-		}
-	}
+	state, desc = runEventWorkflow(ctx, cfg, event, dispatch, webLog, projectStore)
 
 	writeStatus(ctx, conn, protocol.StatusMsg{
 		MsgType:     "Status",
@@ -470,21 +311,187 @@ func sendNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookNa
 	dispatch.Send(ctx, n)
 }
 
-// sendStartNotification sends a built-in "Starting <hookLabel>" notification
-// with state "pending" before a hook begins execution.
-func sendStartNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookLabel string, event protocol.EventMsg) {
-	n := notifier.Notification{
-		Repo:       event.Repo,
-		Event:      event.GitHubEvent,
-		Action:     event.Action,
-		HookName:   hookLabel,
-		Message:    fmt.Sprintf("Starting %s", hookLabel),
-		Sender:     event.Sender,
-		DeliveryID: event.DeliveryID,
-		State:      "pending",
-		RawPayload: event.Payload,
+// runEventWorkflow resolves the workflow for an event, checks out the repo, and
+// executes the resolved DAG. It returns the overall terminal state ("success",
+// "failure", or "skipped") and a human-readable description. It never panics on
+// a missing workflow — that is a benign "skipped" outcome.
+func runEventWorkflow(ctx context.Context, cfg Config, event protocol.EventMsg, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore) (state, desc string) {
+	wf, err := projectStore.ResolveWorkflow(ctx, event.Repo, event.GitHubEvent, event.Action)
+	if err != nil {
+		log.Error().Err(err).Str("repo", event.Repo).Str("event", eventLabel(event)).Msg("workflow resolution failed")
+		return "failure", err.Error()
+	}
+	if wf == nil {
+		log.Info().Str("repo", event.Repo).Str("event", eventLabel(event)).Msg("no workflow configured for event — skipping")
+		return "skipped", "no workflow configured"
 	}
 
-	log.Debug().Str("hook", hookLabel).Msgf("Event %s on %s: queuing start notification", eventLabel(event), event.Repo)
-	dispatch.Send(ctx, n)
+	repoPath, err := EnsureRepo(cfg.ReposDir, event.Repo, event.CloneURL)
+	if err != nil {
+		log.Error().Err(err).Str("repo", event.Repo).Msg("repo sync failed")
+		return "failure", err.Error()
+	}
+	if err := Checkout(repoPath, event); err != nil {
+		log.Error().Err(err).Msgf("Event %s on %s: checkout failed", eventLabel(event), event.Repo)
+		return "failure", err.Error()
+	}
+	currentRef, currentHash, gitErr := CurrentGitState(repoPath)
+	if gitErr != nil {
+		log.Warn().Err(gitErr).Str("repo", event.Repo).Msg("failed to read current git state")
+	} else {
+		projectStore.UpdateGitState(ctx, event.Repo, currentRef, currentHash)
+	}
+
+	graph, err := BuildGraph(wf.Nodes, wf.Edges)
+	if err == nil {
+		err = Validate(graph)
+	}
+	if err != nil {
+		log.Error().Err(err).Int64("workflow", wf.ID).Str("repo", event.Repo).Msg("invalid workflow graph")
+		recordFailedRun(ctx, projectStore, wf, event, currentRef, currentHash, err.Error())
+		return "failure", err.Error()
+	}
+
+	return executeWorkflowGraph(ctx, cfg, event, wf, graph, repoPath, currentRef, currentHash, dispatch, webLog, projectStore)
+}
+
+// executeWorkflowGraph starts a workflow run, executes the DAG, and folds the
+// per-node results into the overall run state. It drives both the persisted run
+// records and the live web execution log, and dispatches a run-completion
+// notification honoring the configured notify_on filter.
+func executeWorkflowGraph(ctx context.Context, cfg Config, event protocol.EventMsg, wf *Workflow, graph Graph, repoPath, ref, hash string, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore) (state, desc string) {
+	runID, err := projectStore.StartRun(ctx, &WorkflowRun{
+		WorkflowID: wf.ID,
+		Repo:       event.Repo,
+		EventType:  eventLabel(event),
+		DeliveryID: event.DeliveryID,
+		Ref:        ref,
+		Hash:       hash,
+		Trigger:    deriveTrigger(event),
+	})
+	if err != nil {
+		log.Error().Err(err).Int64("workflow", wf.ID).Msg("failed to start workflow run")
+		return "failure", err.Error()
+	}
+
+	workspace, err := os.MkdirTemp("", "eventic-run-")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create run workspace")
+		projectStore.FinishRun(ctx, runID, "failure")
+		return "failure", err.Error()
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(workspace); rmErr != nil {
+			log.Warn().Err(rmErr).Str("workspace", workspace).Msg("failed to remove run workspace")
+		}
+	}()
+
+	rc := &RunContext{
+		Vars:         make(map[string]string),
+		WorkspaceDir: workspace,
+		BaseEnv:      os.Environ(),
+	}
+
+	// Wrap the real runner so each node also drives the run records and the
+	// live web execution log (node_key as the hook name) for SSE streaming.
+	runner := newNodeRunner(repoPath, event)
+	tracked := func(nodeCtx context.Context, step DAGStep, runCtx *RunContext) NodeResult {
+		projectStore.StartRunNode(ctx, runID, step.Key)
+		webLog.StartHook(event.DeliveryID, step.Key)
+
+		res := runner(nodeCtx, step, runCtx)
+
+		projectStore.FinishRunNode(ctx, runID, step.Key, res.State, res.ExitCode, res.Output)
+		webLog.FinishHook(event.DeliveryID, step.Key, res.State, res.Output)
+		projectStore.UpdateOutput(ctx, event.Repo, event, step.Key, res.State, res.Output)
+		return res
+	}
+
+	workers := cfg.MaxNodeWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	results, execErr := Execute(ctx, graph, rc, tracked, workers)
+	if execErr != nil {
+		log.Warn().Err(execErr).Int64("run", runID).Msg("workflow execution interrupted")
+	}
+
+	// Fold node results: the run fails if any node failed and was not marked
+	// continue_on_error. Skipped run-node records are written for skips so the
+	// run detail reflects the full graph.
+	state = "success"
+	desc = ""
+	var lastOutput string
+	for _, res := range results {
+		switch res.State {
+		case NodeStateSkipped:
+			projectStore.StartRunNode(ctx, runID, res.Key)
+			projectStore.FinishRunNode(ctx, runID, res.Key, NodeStateSkipped, 0, "")
+		case NodeStateFailure:
+			lastOutput = res.Output
+			if !graph.Nodes[res.Key].ContinueOnError {
+				state = "failure"
+				if desc == "" {
+					desc = fmt.Sprintf("node %q failed", res.Key)
+				}
+			}
+		case NodeStateSuccess:
+			lastOutput = res.Output
+		}
+	}
+	if execErr != nil && state != "failure" {
+		state = "failure"
+		desc = execErr.Error()
+	}
+
+	projectStore.FinishRun(ctx, runID, state)
+	projectStore.PruneRuns(ctx, event.Repo, 0)
+
+	// Run-completion notification: honor the configured default notify template
+	// and notify_on filter at run granularity, reusing the last node's output.
+	if cfg.DefaultNotify != "" && ShouldNotify(cfg.DefaultNotifyOn, state) {
+		sendNotification(ctx, dispatch, "workflow:summary", cfg.DefaultNotify, lastOutput, state, cfg.DefaultNotifyOn, event)
+	}
+
+	log.Info().
+		Int64("run", runID).
+		Int64("workflow", wf.ID).
+		Str("repo", event.Repo).
+		Str("state", state).
+		Msg("workflow run complete")
+	return state, desc
+}
+
+// recordFailedRun persists a synthetic failed run for a workflow whose graph was
+// rejected before execution, so the failure is visible in run history.
+func recordFailedRun(ctx context.Context, projectStore *ProjectStore, wf *Workflow, event protocol.EventMsg, ref, hash, reason string) {
+	runID, err := projectStore.StartRun(ctx, &WorkflowRun{
+		WorkflowID: wf.ID,
+		Repo:       event.Repo,
+		EventType:  eventLabel(event),
+		DeliveryID: event.DeliveryID,
+		Ref:        ref,
+		Hash:       hash,
+		Trigger:    deriveTrigger(event),
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to record invalid workflow run")
+		return
+	}
+	log.Debug().Int64("run", runID).Str("reason", reason).Msg("recording failed workflow run for invalid graph")
+	projectStore.FinishRun(ctx, runID, "failure")
+}
+
+// deriveTrigger classifies how a run was initiated for the workflow_runs.trigger
+// column: "comms" for comms events, "manual" for dashboard/manual replays, and
+// "webhook" for GitHub-delivered events.
+func deriveTrigger(event protocol.EventMsg) string {
+	switch {
+	case event.GitHubEvent == "comms":
+		return "comms"
+	case strings.HasPrefix(event.DeliveryID, "manual-"), strings.HasPrefix(event.DeliveryID, "comms-"):
+		return "manual"
+	default:
+		return "webhook"
+	}
 }

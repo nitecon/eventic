@@ -24,7 +24,7 @@ type SlackNotifier struct {
 }
 
 func (n *SlackNotifier) Name() string         { return "slack" }
-func (n *SlackNotifier) GetMetrics() *Metrics  { return nil }
+func (n *SlackNotifier) GetMetrics() *Metrics { return nil }
 
 func (n *SlackNotifier) Ping(ctx context.Context) error {
 	// Slack webhooks don't have a health endpoint. Send a minimal request

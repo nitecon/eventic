@@ -25,6 +25,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Environment variables:\n")
 		fmt.Fprintf(os.Stderr, "  EVENTIC_WEBHOOK_SECRET   GitHub webhook secret (required)\n")
 		fmt.Fprintf(os.Stderr, "  EVENTIC_CLIENT_TOKENS    Comma-separated client auth tokens (required)\n")
+		fmt.Fprintf(os.Stderr, "  EVENTIC_COMMS_TOKENS     Comma-separated comms-ingress tokens (optional;\n")
+		fmt.Fprintf(os.Stderr, "                           falls back to EVENTIC_CLIENT_TOKENS when unset)\n")
 		fmt.Fprintf(os.Stderr, "  EVENTIC_LISTEN_ADDR      Listen address (default :8080)\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
@@ -43,6 +45,7 @@ func main() {
 		WebhookSecret: getEnv("EVENTIC_WEBHOOK_SECRET", ""),
 		ListenAddr:    getEnv("EVENTIC_LISTEN_ADDR", ":8080"),
 		ClientTokens:  parseTokens(getEnv("EVENTIC_CLIENT_TOKENS", "")),
+		CommsTokens:   parseTokens(getEnv("EVENTIC_COMMS_TOKENS", "")),
 	}
 
 	if cfg.WebhookSecret == "" {

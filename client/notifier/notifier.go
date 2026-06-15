@@ -102,7 +102,7 @@ type MultiNotifier struct {
 }
 
 func (m *MultiNotifier) Name() string         { return "multi" }
-func (m *MultiNotifier) GetMetrics() *Metrics  { return m.metrics }
+func (m *MultiNotifier) GetMetrics() *Metrics { return m.metrics }
 
 func (m *MultiNotifier) Ping(ctx context.Context) error {
 	var errs []string
@@ -215,9 +215,9 @@ type NoopNotifier struct {
 }
 
 func (n *NoopNotifier) Notify(ctx context.Context, notification Notification) error { return nil }
-func (n *NoopNotifier) Ping(ctx context.Context) error                             { return nil }
-func (n *NoopNotifier) Name() string                                               { return "noop" }
-func (n *NoopNotifier) GetMetrics() *Metrics                                       { return n.metrics }
+func (n *NoopNotifier) Ping(ctx context.Context) error                              { return nil }
+func (n *NoopNotifier) Name() string                                                { return "noop" }
+func (n *NoopNotifier) GetMetrics() *Metrics                                        { return n.metrics }
 
 // repoSlug converts "org/repo" to "org-repo" for safe channel naming.
 func repoSlug(repo string) string {
