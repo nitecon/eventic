@@ -211,17 +211,27 @@ func TestDashboardTemplateConformance(t *testing.T) {
 		t.Error("nav anchors must not use data-nd-action=\"GET #\" — use data-nd-set only")
 	}
 
-	// Fix 3: theme must use meta-swap pattern, not always-on <link> tags.
-	// Two nd-theme metas with data-href must be present.
+	// Fix 3: theme uses the spec pattern — ONE active theme <link class="theme">
+	// (the default) that the runtime swaps, PLUS nd-theme metas declaring both.
+	// The active default-theme stylesheet must actually load so the page is
+	// styled before/without JS, not left unstyled until the first toggle.
+	if !strings.Contains(body, `class="theme" data-theme="light"`) {
+		t.Error("expected an active default theme <link class=\"theme\" data-theme=\"light\"> so a theme stylesheet loads by default")
+	}
+	if !strings.Contains(body, `themes/light.min.css`) || !strings.Contains(body, `themes/dark.min.css`) {
+		t.Error("expected both light and dark theme stylesheet URLs to be referenced")
+	}
+	// Two nd-theme metas with data-href must declare the available themes.
 	if !strings.Contains(body, `name="nd-theme" content="light" data-href=`) {
 		t.Error("expected nd-theme light meta with data-href for theme-swap pattern")
 	}
 	if !strings.Contains(body, `name="nd-theme" content="dark"`) {
 		t.Error("expected nd-theme dark meta for theme-swap pattern")
 	}
-	// The old always-on theme <link> tags must be gone.
+	// The earlier mistake (loading BOTH themes via always-on data-nd-theme-href
+	// links, which conflict) must not return.
 	if strings.Contains(body, `data-nd-theme-href`) {
-		t.Error("must not use always-on <link data-nd-theme-href> — use nd-theme meta swap instead")
+		t.Error("must not use conflicting always-on <link data-nd-theme-href> tags")
 	}
 
 	// Fix 4: project-detail binding must be on the inner body div, not the section.

@@ -6,7 +6,10 @@
   <title>Eventic — [[ .Brand ]]</title>
   <!-- ndesign CDN bundle (latest channel). Asset names confirmed against published bundle. -->
   <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.css">
-  <!-- Theme metas: ndesign runtime loads the active theme and swaps on toggle. -->
+  <!-- Active (default) theme stylesheet. class="theme" is REQUIRED so the runtime can find
+       and swap this <link>; data-theme marks the currently active theme. -->
+  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css" class="theme" data-theme="light">
+  <!-- Available themes the toggle swaps between (content=name, data-href=stylesheet URL). -->
   <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
   <meta name="nd-theme" content="dark"  data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/dark.min.css">
   <!-- API endpoint meta tags for ndesign data binding. -->
