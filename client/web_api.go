@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -548,54 +546,4 @@ func wsForward(ctx context.Context, conn *websocket.Conn, event ExecutionEvent, 
 	return true
 }
 
-// ── Dashboard shell ──────────────────────────────────────────────────────────
-
-// indexHandler serves the dashboard at "/". When StaticDir contains an
-// index.html it is served via http.FileServer so the user can supply custom
-// ndesign markup; otherwise a minimal embedded placeholder shell is returned.
-func indexHandler(cfg WebConfig) http.Handler {
-	if cfg.StaticDir != "" {
-		if info, err := os.Stat(filepath.Join(cfg.StaticDir, "index.html")); err == nil && !info.IsDir() {
-			return http.FileServer(http.Dir(cfg.StaticDir))
-		}
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(placeholderShell))
-	})
-}
-
-// placeholderShell is the minimal ndesign-wired dashboard served when no
-// StaticDir is configured. It loads the ndesign CDN bundle and declares
-// endpoint meta tags so ndesign markup can reference the API. The asset
-// filenames (ndesign.css / ndesign.js) are best-effort; confirm the exact
-// names against the published CDN bundle.
-const placeholderShell = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Eventic Workflow Console</title>
-  <!-- ndesign CDN bundle (confirm exact asset names against the published bundle). -->
-  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.css">
-  <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.js"></script>
-  <!-- API endpoints for ndesign markup to bind against. -->
-  <meta name="endpoint:workflows" content="/api/workflows">
-  <meta name="endpoint:event-types" content="/api/event-types">
-  <meta name="endpoint:projects" content="/api/projects">
-  <meta name="endpoint:refs" content="/api/refs">
-  <meta name="endpoint:runs" content="/api/runs">
-  <meta name="endpoint:runs-ws" content="/ws/runs">
-  <meta name="endpoint:runs-sse" content="/api/runs/stream">
-</head>
-<body>
-  <main style="font-family:system-ui,sans-serif;padding:2rem;color:#17202a">
-    <h1>Eventic workflow console</h1>
-    <p>Provide <code>static_dir</code> to customize this dashboard with your ndesign markup.</p>
-  </main>
-</body>
-</html>`
+// indexHandler and the template shell have been moved to web_templates.go.

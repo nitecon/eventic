@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eventic — [[ .Brand ]]</title>
+  <!-- ndesign CDN bundle (latest channel). Asset names confirmed against published bundle. -->
+  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.css">
+  <!-- Theme metas: ndesign runtime loads the active theme and swaps on toggle. -->
+  <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
+  <meta name="nd-theme" content="dark"  data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/dark.min.css">
+  <!-- API endpoint meta tags for ndesign data binding. -->
+  <meta name="endpoint:workflows"  content="/api/workflows">
+  <meta name="endpoint:event-types" content="/api/event-types">
+  <meta name="endpoint:projects"   content="/api/projects">
+  <meta name="endpoint:refs"       content="/api/refs">
+  <meta name="endpoint:runs"       content="/api/runs">
+  <meta name="endpoint:runs-sse"   content="/api/runs/stream">
+  <!-- Absolute WebSocket base injected server-side so the browser can open the ws:// URL. -->
+  <meta name="endpoint:runs-ws" content="[[ .WSBase ]]">
+  <!-- Variable defaults: repo starts empty so deferred panels stay quiet until a project is chosen. -->
+  <meta name="var:repo" content="">
+</head>
+<body class="app-page">
+  <div class="app-layout nd-h-screen nd-overflow-hidden">
+
+    <!-- ── Left sidebar ─────────────────────────────────────────────────── -->
+    <nav class="sidebar" id="app-sidebar">
+      <div class="nd-nav-brand">
+        <a href="/">Eventic</a>
+      </div>
+
+      <!-- Global workflows -->
+      [[ if .Global ]]
+      <span class="nd-nav-section">Global</span>
+      <ul class="nd-nav-menu">
+        [[ range .Global ]]
+        <li>
+          <a href="#global-[[ .ID ]]">[[ .Name ]] <span class="nd-badge nd-badge-info">[[ .EventType ]]</span></a>
+          [[ if .Steps ]]
+          <ul class="nd-nav-menu">
+            [[ range .Steps ]]
+            <li><a href="#step-[[ .Name ]]">[[ if .Name ]][[ .Name ]][[ else ]][[ .Command ]][[ end ]]</a></li>
+            [[ end ]]
+          </ul>
+          [[ end ]]
+        </li>
+        [[ end ]]
+      </ul>
+      [[ end ]]
+
+      <!-- Per-project workflows -->
+      [[ range .Projects ]]
+      <span class="nd-nav-section">[[ .Repo ]]</span>
+      <ul class="nd-nav-menu">
+        <li>
+          <a href="#"
+             data-nd-set="repo=[[ .Repo ]]"
+             data-nd-success="refresh:#project-detail,refresh:#project-runs">[[ .Repo ]]</a>
+        </li>
+        [[ range .Workflows ]]
+        <li>
+          <a href="#proj-wf-[[ .ID ]]">[[ .Name ]] <span class="nd-badge [[ if .Enabled ]]nd-badge-success[[ else ]]nd-badge-info[[ end ]]">[[ .EventType ]]</span></a>
+          [[ if .Steps ]]
+          <ul class="nd-nav-menu">
+            [[ range .Steps ]]
+            <li><a href="#">[[ if .Name ]][[ .Name ]][[ else ]][[ .Command ]][[ end ]]</a></li>
+            [[ end ]]
+          </ul>
+          [[ end ]]
+        </li>
+        [[ end ]]
+      </ul>
+      [[ end ]]
+    </nav>
+    <!-- ── App body ──────────────────────────────────────────────────────── -->
+    <div class="app-body">
+      <header>
+        <div class="app-header-left">
+          <button class="hamburger" data-nd-toggle="sidebar" aria-label="Toggle navigation">&#9776;</button>
+          <h1 class="app-header-title">Eventic</h1>
+        </div>
+        <div class="app-header-right">
+          <a href="/" class="nd-active">Dashboard</a>
+          <a href="#project-runs">Runs</a>
+          <a href="#event-stream">Events</a>
+          <button class="nd-btn-ghost nd-btn-sm" data-nd-theme-toggle>Toggle Theme</button>
+        </div>
+      </header>
+
+      <main class="app-content">
+
+        <!-- ── Project detail panel ──────────────────────────────────────── -->
+        <section class="nd-panel" id="project-detail">
+          <header class="nd-panel-header">
+            <h2>Project</h2>
+          </header>
+          <!-- Binding lives on the inner container so the panel header is never replaced. -->
+          <div id="project-detail-body"
+               data-nd-bind="/api/projects/${repo}"
+               data-nd-defer
+               data-nd-template="project-card-tmpl">
+            <p class="nd-well-title">Select a project from the sidebar to view its status.</p>
+          </div>
+        </section>
+
+        <!-- ndesign row template for a ProjectState object -->
+        <template id="project-card-tmpl">
+          <article class="nd-card">
+            <header class="nd-card-header">
+              <h3 class="nd-card-title">{{repo}}</h3>
+              <span class="nd-badge nd-badge-info">{{state}}</span>
+            </header>
+            <div class="nd-card-body">
+              <div class="nd-well nd-well-sm">
+                <p class="nd-well-title">Ref</p>
+                <pre><code>{{ref}}</code></pre>
+              </div>
+              <div class="nd-well nd-well-sm">
+                <p class="nd-well-title">Hash</p>
+                <pre><code>{{hash}}</code></pre>
+              </div>
+              <div class="nd-well nd-well-sm">
+                <p class="nd-well-title">Event / Action</p>
+                <pre><code>{{event}} / {{action}}</code></pre>
+              </div>
+              <div class="nd-well nd-well-sm">
+                <p class="nd-well-title">Latest Output</p>
+                <pre><code>{{latest_output}}</code></pre>
+              </div>
+            </div>
+            <footer class="nd-card-footer">
+              Updated: {{updated_at}}
+            </footer>
+          </article>
+        </template>
+
+        <!-- ── Recent runs panel ─────────────────────────────────────────── -->
+        <!-- Binding is on the <tbody> only — section and table are structural shells.     -->
+        <!-- data-nd-select is omitted: the /api/runs endpoint returns a plain JSON array. -->
+        <section class="nd-panel" id="project-runs">
+          <header class="nd-panel-header">
+            <h2>Recent Runs</h2>
+          </header>
+          <article class="nd-card">
+            <div class="nd-card-body">
+              <table class="nd-table-striped nd-table-hover">
+                <thead>
+                  <tr>
+                    <th>Event</th>
+                    <th>State</th>
+                    <th>Trigger</th>
+                    <th>Started</th>
+                    <th>Duration (ms)</th>
+                  </tr>
+                </thead>
+                <tbody data-nd-bind="/api/runs?repo=${repo}&amp;limit=20"
+                       data-nd-defer
+                       data-nd-template="run-row-tmpl">
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <!-- ndesign row template for WorkflowRun rows -->
+        <template id="run-row-tmpl">
+          <tr>
+            <td>{{event_type}}</td>
+            <td><span class="nd-badge nd-badge-info">{{state}}</span></td>
+            <td>{{trigger}}</td>
+            <td>{{started_at}}</td>
+            <td>{{duration_ms}}</td>
+          </tr>
+        </template>
+
+        <!-- ── Live event stream panel ────────────────────────────────────── -->
+        <section class="nd-panel" id="event-stream">
+          <header class="nd-panel-header">
+            <h2>Live Event Stream</h2>
+          </header>
+          <article class="nd-card">
+            <div class="nd-card-body">
+              <table class="nd-table-striped nd-table-hover">
+                <thead>
+                  <tr>
+                    <th>Repo</th>
+                    <th>Event / Action</th>
+                    <th>State</th>
+                    <th>Delivery ID</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody data-nd-ws="${runs-ws}"
+                       data-nd-ws-filter="type:run"
+                       data-nd-template="event-row-tmpl"
+                       data-nd-mode="prepend"
+                       data-nd-max="50">
+                </tbody>
+              </table>
+            </div>
+            <footer class="nd-card-footer">
+              Live — connected via WebSocket
+            </footer>
+          </article>
+        </section>
+
+        <!-- ndesign row template for ExecutionEvent WS frames. -->
+        <!-- IMPORTANT: {{field}} syntax here is intentional — it is ndesign row-template -->
+        <!-- syntax, not Go template syntax. The Go template engine uses square-bracket   -->
+        <!-- delimiters, so double-brace literals pass through untouched into the output. -->
+        <template id="event-row-tmpl">
+          <tr>
+            <td>{{repo}}</td>
+            <td>{{event}} / {{action}}</td>
+            <td><span class="nd-badge nd-badge-info">{{state}}</span></td>
+            <td>{{delivery_id}}</td>
+            <td>{{updated_at}}</td>
+          </tr>
+        </template>
+
+        <!-- ── Projects overview panel ───────────────────────────────────── -->
+        <section class="nd-panel" id="projects-overview">
+          <header class="nd-panel-header">
+            <h2>Projects</h2>
+          </header>
+          <article class="nd-card">
+            <header class="nd-card-header">
+              <h3 class="nd-card-title">Managed Repositories</h3>
+            </header>
+            <div class="nd-card-body">
+              <ul data-nd-bind="/api/projects"
+                  data-nd-refresh="30000"
+                  data-nd-template="project-overview-row-tmpl">
+              </ul>
+            </div>
+          </article>
+        </section>
+
+        <!-- ndesign row template for the projects string array -->
+        <template id="project-overview-row-tmpl">
+          <li>
+            <a href="#"
+               data-nd-set="repo={{.}}"
+               data-nd-success="refresh:#project-detail,refresh:#project-runs">{{.}}</a>
+          </li>
+        </template>
+
+      </main>
+    </div><!-- /.app-body -->
+  </div><!-- /.app-layout -->
+
+  <!-- ndesign CDN JS — must be last in <body>. -->
+  <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.js"></script>
+</body>
+</html>

@@ -268,9 +268,10 @@ func StartWebConsole(ctx context.Context, cfg Config, logStore *ExecutionLog, pr
 
 	mux := http.NewServeMux()
 
-	// Dashboard shell: a user-supplied static dir (ndesign markup) or a minimal
-	// embedded placeholder. The full editor UI is the user's responsibility.
-	mux.Handle("/", indexHandler(cfg.Web))
+	// Dashboard shell: a user-supplied static dir (ndesign markup) or the
+	// embedded Go-template dashboard. The store is passed so the left-nav
+	// hierarchy can be server-rendered on each request.
+	mux.Handle("/", indexHandler(cfg, projectStore))
 
 	// ── ndesign JSON API ─────────────────────────────────────────────────────
 	mux.HandleFunc("/api/workflows", workflowsCollectionHandler(projectStore))

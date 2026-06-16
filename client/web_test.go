@@ -78,19 +78,19 @@ func TestEventsHandlerReturnsJSON(t *testing.T) {
 	}
 }
 
-func TestIndexHandlerServesPlaceholderShell(t *testing.T) {
+func TestIndexHandlerServesEmbeddedDashboard(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:16384"
 	rec := httptest.NewRecorder()
 
-	indexHandler(WebConfig{}).ServeHTTP(rec, req)
+	indexHandler(Config{}, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
 	for _, expected := range []string{
-		"Eventic workflow console",
-		"static_dir",
+		`class="app-page"`,
 		`name="endpoint:workflows"`,
 		`name="endpoint:runs-ws"`,
 		"ndesign-cdn/ndesign/latest/",
@@ -108,7 +108,7 @@ func TestIndexHandlerServesStaticDir(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 
-	indexHandler(WebConfig{StaticDir: dir}).ServeHTTP(rec, req)
+	indexHandler(Config{Web: WebConfig{StaticDir: dir}}, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
