@@ -91,11 +91,7 @@
                 </select>
               </div>
               <div class="nd-form-group">
-                <label for="workflow-step-name">Step Name</label>
-                <input id="workflow-step-name" name="step_name" required>
-              </div>
-              <div class="nd-form-group">
-                <label for="workflow-action-type">Action Type</label>
+                <label for="workflow-action-type">Action</label>
                 <select id="workflow-action-type" name="action_type" required>
                   [[ range .Actions ]]
                   <option value="[[ .Value ]]">[[ .Label ]]</option>
@@ -165,10 +161,6 @@
                   <option value="[[ .Value ]]">[[ .Label ]]</option>
                   [[ end ]]
                 </select>
-              </div>
-              <div class="nd-form-group">
-                <label for="workflow-post-action-name">Post Action Name</label>
-                <input id="workflow-post-action-name" name="post_action_name">
               </div>
               <div class="nd-form-group">
                 <label for="workflow-post-command">Post Command</label>
@@ -296,13 +288,10 @@
                   [[ range .TypedSteps ]]
                   [[ $step := . ]]
                   <form data-eventic-action="PUT /api/workflow-config/[[ $workflow.ID ]]/steps/[[ .NodeKey ]]">
+                    <input type="hidden" name="name" value="[[ .Name ]]">
                     <div class="nd-grid nd-grid-2">
                       <div class="nd-form-group">
-                        <label for="step-name-[[ $workflow.ID ]]-[[ .NodeKey ]]">Step Name</label>
-                        <input id="step-name-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="name" value="[[ .Name ]]" required>
-                      </div>
-                      <div class="nd-form-group">
-                        <label for="step-type-[[ $workflow.ID ]]-[[ .NodeKey ]]">Action Type</label>
+                        <label for="step-type-[[ $workflow.ID ]]-[[ .NodeKey ]]">Action</label>
                         <select id="step-type-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="action_type" required>
                           [[ range $.Actions ]]
                           <option value="[[ .Value ]]" [[ if eq .Value $step.Type ]]selected[[ end ]]>[[ .Label ]]</option>
@@ -373,10 +362,7 @@
                           [[ end ]]
                         </select>
                       </div>
-                      <div class="nd-form-group">
-                        <label for="step-post-action-name-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Action Name</label>
-                        <input id="step-post-action-name-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_action_name" value="[[ .PostActionName ]]">
-                      </div>
+                      <input type="hidden" name="post_action_name" value="[[ .PostActionName ]]">
                       <div class="nd-form-group">
                         <label for="step-post-command-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Command</label>
                         <input id="step-post-command-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_command" value="[[ .PostCommand ]]">
@@ -467,11 +453,7 @@
                   <form data-eventic-action="POST /api/workflow-config/[[ .ID ]]/steps">
                     <div class="nd-grid nd-grid-2">
                       <div class="nd-form-group">
-                        <label for="append-step-name-[[ .ID ]]">Step Name</label>
-                        <input id="append-step-name-[[ .ID ]]" name="name" required>
-                      </div>
-                      <div class="nd-form-group">
-                        <label for="append-step-action-[[ .ID ]]">Action Type</label>
+                        <label for="append-step-action-[[ .ID ]]">Action</label>
                         <select id="append-step-action-[[ .ID ]]" name="action_type" required>
                           [[ range $.Actions ]]
                           <option value="[[ .Value ]]">[[ .Label ]]</option>
@@ -541,10 +523,6 @@
                           <option value="[[ .Value ]]">[[ .Label ]]</option>
                           [[ end ]]
                         </select>
-                      </div>
-                      <div class="nd-form-group">
-                        <label for="append-step-post-action-name-[[ .ID ]]">Post Action Name</label>
-                        <input id="append-step-post-action-name-[[ .ID ]]" name="post_action_name">
                       </div>
                       <div class="nd-form-group">
                         <label for="append-step-post-command-[[ .ID ]]">Post Command</label>
@@ -644,7 +622,65 @@
 
   <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.js"></script>
   <script>
+    const eventicActionFields = {
+      run_command: ["command", "result_exit_codes", "timeout_seconds", "continue_on_error"],
+      send_http_request: ["http_method", "http_url", "http_headers", "http_body", "result_statuses", "timeout_seconds", "continue_on_error"],
+      send_project_message: ["project_repo", "project_ref", "project_message", "timeout_seconds", "continue_on_error"],
+      trigger_project_event: ["project_repo", "project_ref", "project_event_type", "project_message", "timeout_seconds", "continue_on_error"]
+    };
+    const eventicPostActionFields = {
+      run_command: ["post_command", "post_result_exit_codes", "post_timeout_seconds", "post_continue_on_error"],
+      send_http_request: ["post_http_method", "post_http_url", "post_http_headers", "post_http_body", "post_result_statuses", "post_timeout_seconds", "post_continue_on_error"],
+      send_project_message: ["post_project_repo", "post_project_ref", "post_project_message", "post_timeout_seconds", "post_continue_on_error"],
+      trigger_project_event: ["post_project_repo", "post_project_ref", "post_project_event_type", "post_project_message", "post_timeout_seconds", "post_continue_on_error"]
+    };
+    const eventicResponseFields = ["response_path", "response_capture"];
+    const eventicAllActionFields = [...new Set(Object.values(eventicActionFields).flat())];
+    const eventicAllPostActionFields = [...new Set(Object.values(eventicPostActionFields).flat())];
+
+    function eventicFieldGroup(field) {
+      return field.closest(".nd-form-group, .nd-checkbox");
+    }
+
+    function eventicSetFieldVisible(form, name, visible) {
+      for (const field of form.querySelectorAll(`[name="${name}"]`)) {
+        const group = eventicFieldGroup(field);
+        if (group) {
+          group.hidden = !visible;
+          for (const groupedField of group.querySelectorAll("input, select, textarea")) {
+            groupedField.disabled = !visible;
+          }
+          continue;
+        }
+        field.disabled = !visible;
+      }
+    }
+
+    function eventicShowOnly(form, managedNames, visibleNames) {
+      const visible = new Set(visibleNames);
+      for (const name of managedNames) {
+        eventicSetFieldVisible(form, name, visible.has(name));
+      }
+    }
+
+    function eventicRefreshWorkflowForm(form) {
+      const actionType = form.elements.action_type?.value || "run_command";
+      const responseMode = form.elements.response_mode?.value || "noop";
+      const postActionType = form.elements.post_action_type?.value || "";
+
+      eventicShowOnly(form, eventicAllActionFields, eventicActionFields[actionType] || []);
+      eventicShowOnly(form, eventicResponseFields, responseMode === "noop" ? [] : eventicResponseFields);
+      eventicShowOnly(form, eventicAllPostActionFields, eventicPostActionFields[postActionType] || []);
+    }
+
+    function eventicRefreshWorkflowForms() {
+      for (const form of document.querySelectorAll("form[data-eventic-action]")) {
+        eventicRefreshWorkflowForm(form);
+      }
+    }
+
     function eventicFormPayload(form) {
+      eventicRefreshWorkflowForm(form);
       const payload = {};
       for (const el of form.elements) {
         if (!el.name || el.disabled) continue;
@@ -687,6 +723,12 @@
       }
     });
 
+    document.addEventListener("change", (event) => {
+      if (!["action_type", "response_mode", "post_action_type"].includes(event.target.name)) return;
+      const form = event.target.closest("form[data-eventic-action]");
+      if (form) eventicRefreshWorkflowForm(form);
+    });
+
     document.addEventListener("click", async (event) => {
       const button = event.target.closest("[data-eventic-delete]");
       if (!button) return;
@@ -697,6 +739,8 @@
         alert(err.message);
       }
     });
+
+    eventicRefreshWorkflowForms();
   </script>
 </body>
 </html>

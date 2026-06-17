@@ -50,6 +50,7 @@ content:
         - "`event_type` is selected from `GET /api/event-types` values, such as `push`, `pull_request.opened`, or `comms`."
         - The compatibility API still accepts a newline-delimited `steps` field where each line is either a shell command or `Display name | shell command`; those lines become sequential `run_command` nodes linked by success edges.
         - The typed config path accepts either `typed_steps` or a flat initial step on create. Supported `action_type` values are `run_command`, `send_http_request`, `send_project_message`, and `trigger_project_event`.
+        - The configuration UI treats step names as optional implementation detail: create/append forms do not ask for a separate step name, and existing step labels are preserved through hidden fields. The action select progressively shows only fields relevant to the selected action, response mode, and post action.
         - HTTP steps use `http_method`, `http_url`, optional `http_headers`, optional `http_body`, and `result_statuses` (for example `200-299`).
         - Command steps use `command` and `result_exit_codes` (for example `0`).
         - Project message/event steps use `project_repo`, optional `project_ref`, `project_message`, and for trigger-event steps `project_event_type`.

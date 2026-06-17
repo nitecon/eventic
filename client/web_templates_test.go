@@ -212,9 +212,20 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		`data-eventic-action="POST /api/workflow-config?scope=global"`,
 		`name="action_type"`,
 		`name="response_mode"`,
+		"eventicRefreshWorkflowForm",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("expected global configuration page to contain %q", expected)
+		}
+	}
+	for _, unwanted := range []string{
+		"Step Name",
+		"Post Action Name",
+		"Action Type",
+		`id="workflow-step-name"`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("expected global configuration page not to contain redundant label %q", unwanted)
 		}
 	}
 }
