@@ -363,6 +363,8 @@ Mapping conditions are JSON objects. Keys can reference provider fields (`event`
 
 Non-GitHub provider payloads must include or expose a target `repo` (`org/repo`) so the relay can route to subscribed clients and the workflow runner has a checkout context. Prometheus-style hooks can provide `commonLabels.repo`; custom hooks can provide a top-level `repo`. Bitbucket events are normalized from header names like `repo:push` into condition keys like `repo.push`, and push refs are expanded to `refs/heads/*` or `refs/tags/*` when possible.
 
+The global Configuration section is split by job: `/global` manages workflows, `/global/events` manages the stable-event catalog, `/global/mappings` provides the drag/drop provider-to-stable-event mapper, `/global/mappings/advanced` exposes raw condition editing, and `/global/events/history` is the normalized event audit/replay view.
+
 Open `/global/events/history` to inspect normalized inbound events. The history shows provider, external event/action, stable event, mapping status, mapping id/name, severity, final state, and a replay action. The same data is available from `GET /api/events`.
 
 For Kubernetes clients, mount persistent storage at `/opt/eventic/state` or set `state.path` to a path inside your own volume mount:
