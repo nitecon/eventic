@@ -140,6 +140,18 @@ func (s *ProjectStore) ListEventMappings(ctx context.Context) ([]EventMapping, e
 	return mappings, rows.Err()
 }
 
+func (s *ProjectStore) GetEventMapping(ctx context.Context, id int64) (EventMapping, error) {
+	if s == nil {
+		return EventMapping{}, sql.ErrNoRows
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, mapping_id, provider, name, enabled, priority, conditions, target_stable_event, created_at, updated_at
+		FROM event_mappings
+		WHERE id = ?
+	`, id)
+	return scanEventMapping(row)
+}
+
 func (s *ProjectStore) CreateEventMapping(ctx context.Context, mapping *EventMapping) (int64, error) {
 	if s == nil || mapping == nil {
 		return 0, nil

@@ -29,6 +29,13 @@ var configurationTmpl = template.Must(
 		ParseFS(templateFS, "templates/configuration.html"),
 )
 
+const (
+	configurationPageWorkflows        = "workflows"
+	configurationPageStableEvents     = "stable-events"
+	configurationPageVisualMappings   = "visual-mappings"
+	configurationPageAdvancedMappings = "advanced-mappings"
+)
+
 // dashboardView is the server-side view-model rendered into the dashboard
 // template for each request. It carries the left-nav hierarchy (built from the
 // ProjectStore) and the computed WebSocket base URL.
@@ -60,10 +67,15 @@ type configurationView struct {
 	Theme          string
 	Title          string
 	Scope          string
+	Page           string
 	Repo           string
 	Owner          string
 	Name           string
 	IsGlobal       bool
+	ShowWorkflows  bool
+	ShowStablePage bool
+	ShowMapper     bool
+	ShowAdvanced   bool
 	Orgs           []string
 	DefaultOrg     string
 	Projects       []ProjectSummary
@@ -164,7 +176,7 @@ func configurationHandler(store *ProjectStore) http.Handler {
 }
 
 func buildConfigurationView(r *http.Request, store *ProjectStore) (configurationView, bool, error) {
-	scope, repo, ok := configurationRoute(r.URL.Path)
+	scope, repo, page, ok := configurationRoute(r.URL.Path)
 	if !ok {
 		return configurationView{}, false, nil
 	}
@@ -174,12 +186,21 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 	}
 
 	view := configurationView{
-		Brand:        "Eventic",
-		Version:      Version,
-		Theme:        themePreference(r),
-		Scope:        scope,
-		Repo:         repo,
-		IsGlobal:     scope == WorkflowScopeGlobal,
+		Brand:    "Eventic",
+		Version:  Version,
+		Theme:    themePreference(r),
+		Scope:    scope,
+		Page:     page,
+		Repo:     repo,
+		IsGlobal: scope == WorkflowScopeGlobal,
+		ShowWorkflows: scope != WorkflowScopeGlobal ||
+			page == configurationPageWorkflows,
+		ShowStablePage: scope == WorkflowScopeGlobal &&
+			page == configurationPageStableEvents,
+		ShowMapper: scope == WorkflowScopeGlobal &&
+			page == configurationPageVisualMappings,
+		ShowAdvanced: scope == WorkflowScopeGlobal &&
+			page == configurationPageAdvancedMappings,
 		DefaultOrg:   "nitecon",
 		Events:       workflowEventOptionsFromStableEvents(stableEvents),
 		Actions:      workflowActionOptions(),
@@ -200,15 +221,30 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 		view.Projects, _ = store.ListProjectSummaries(r.Context(), view.DefaultOrg, "")
 	}
 	if view.IsGlobal {
-		view.Title = "Global Workflows"
-		mappings, err := store.ListEventMappings(r.Context())
-		if err != nil {
-			return configurationView{}, true, err
+		switch page {
+		case configurationPageStableEvents:
+			view.Title = "Stable Events"
+		case configurationPageVisualMappings:
+			view.Title = "Event Mapper"
+		case configurationPageAdvancedMappings:
+			view.Title = "Advanced Mappings"
+		default:
+			view.Title = "Global Workflows"
 		}
-		view.EventMappings = eventMappingConfigs(mappings)
-		view.StableGroups = stableEventGroups(stableEvents, view.EventMappings)
-		view.ProviderEvents = providerEventConfigs(ProviderEventCatalog())
-		view.ProviderTypes = ProviderEventOptions()
+		if view.ShowMapper || view.ShowAdvanced {
+			mappings, err := store.ListEventMappings(r.Context())
+			if err != nil {
+				return configurationView{}, true, err
+			}
+			view.EventMappings = eventMappingConfigs(mappings)
+		}
+		if view.ShowMapper || view.ShowStablePage {
+			view.StableGroups = stableEventGroups(stableEvents, view.EventMappings)
+		}
+		if view.ShowMapper {
+			view.ProviderEvents = providerEventConfigs(ProviderEventCatalog())
+			view.ProviderTypes = ProviderEventOptions()
+		}
 	} else {
 		view.Owner, view.Name = splitRepoName(repo)
 		view.Title = repo
@@ -219,11 +255,13 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 		view.Project = project
 	}
 
-	workflows, err := listWorkflowConfigs(r.Context(), store, scope, repo)
-	if err != nil {
-		return configurationView{}, true, err
+	if view.ShowWorkflows {
+		workflows, err := listWorkflowConfigs(r.Context(), store, scope, repo)
+		if err != nil {
+			return configurationView{}, true, err
+		}
+		view.Workflows = workflows
 	}
-	view.Workflows = workflows
 	return view, true, nil
 }
 
@@ -277,17 +315,29 @@ func providerEventConfigs(events []ProviderEvent) []providerEventConfig {
 	return configs
 }
 
-func configurationRoute(path string) (string, string, bool) {
+func configurationRoute(path string) (string, string, string, bool) {
 	clean := strings.Trim(path, "/")
 	if clean == "global" {
-		return WorkflowScopeGlobal, "", true
+		return WorkflowScopeGlobal, "", configurationPageWorkflows, true
+	}
+	if clean == "global/events" {
+		return WorkflowScopeGlobal, "", configurationPageStableEvents, true
+	}
+	if clean == "global/mappings" {
+		return WorkflowScopeGlobal, "", configurationPageVisualMappings, true
+	}
+	if clean == "global/mappings/advanced" {
+		return WorkflowScopeGlobal, "", configurationPageAdvancedMappings, true
 	}
 
 	parts := strings.Split(clean, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return WorkflowScopeRepo, parts[0] + "/" + parts[1], true
+	if parts[0] == "global" {
+		return "", "", "", false
+	}
+	return WorkflowScopeRepo, parts[0] + "/" + parts[1], configurationPageWorkflows, true
 }
 
 // buildDashboardView constructs the dashboardView from the store and the

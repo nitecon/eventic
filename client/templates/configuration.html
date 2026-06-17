@@ -118,6 +118,95 @@
           [[ end ]]
         </datalist>
 
+        <nav class="nd-tabs" aria-label="Global configuration sections">
+          <a href="/global" [[ if eq .Page "workflows" ]]class="nd-active"[[ end ]]>Workflows</a>
+          <a href="/global/events" [[ if eq .Page "stable-events" ]]class="nd-active"[[ end ]]>Stable Events</a>
+          <a href="/global/mappings" [[ if eq .Page "visual-mappings" ]]class="nd-active"[[ end ]]>Visual Mapper</a>
+          <a href="/global/mappings/advanced" [[ if eq .Page "advanced-mappings" ]]class="nd-active"[[ end ]]>Advanced Mappings</a>
+        </nav>
+
+        [[ if .ShowStablePage ]]
+        <section class="nd-panel" id="stable-events-management">
+          <header class="nd-panel-header">
+            <h2>Stable Events</h2>
+          </header>
+          <form data-eventic-action="POST /api/stable-events">
+            <div class="nd-grid nd-grid-2">
+              <div class="nd-form-group">
+                <label for="stable-event-key">Event</label>
+                <input id="stable-event-key" name="event" placeholder="catchall" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="stable-event-title">Title</label>
+                <input id="stable-event-title" name="title" placeholder="Catch All" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="stable-event-group">Group</label>
+                <input id="stable-event-group" name="group" value="Custom" required>
+              </div>
+            </div>
+            <div class="nd-form-group">
+              <label for="stable-event-description">Description</label>
+              <textarea id="stable-event-description" name="description" rows="3"></textarea>
+            </div>
+            <div class="nd-form-group">
+              <label for="stable-event-enabled">Enabled</label>
+              <input id="stable-event-enabled" type="checkbox" name="enabled" checked>
+            </div>
+            <button type="submit" class="nd-btn-primary">Create Stable Event</button>
+          </form>
+
+          [[ range .StableGroups ]]
+          <section class="nd-panel">
+            <header class="nd-panel-header">
+              <h3>[[ .Group ]]</h3>
+            </header>
+            [[ range .Events ]]
+            <article class="nd-card">
+              <header class="nd-card-header">
+                <h4 class="nd-card-title">[[ .Title ]]</h4>
+                <span class="nd-badge nd-badge-info">[[ .Event ]]</span>
+              </header>
+              <div class="nd-card-body">
+                <form data-eventic-action="PUT /api/stable-events/[[ .ID ]]">
+                  <div class="nd-grid nd-grid-2">
+                    <div class="nd-form-group">
+                      <label for="stable-event-value-[[ .ID ]]">Event</label>
+                      <input id="stable-event-value-[[ .ID ]]" name="event" value="[[ .Event ]]" [[ if .BuiltIn ]]readonly[[ end ]] required>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="stable-event-title-[[ .ID ]]">Title</label>
+                      <input id="stable-event-title-[[ .ID ]]" name="title" value="[[ .Title ]]" required>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="stable-event-group-[[ .ID ]]">Group</label>
+                      <input id="stable-event-group-[[ .ID ]]" name="group" value="[[ .Group ]]" required>
+                    </div>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="stable-event-description-[[ .ID ]]">Description</label>
+                    <textarea id="stable-event-description-[[ .ID ]]" name="description" rows="3">[[ .Description ]]</textarea>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="stable-event-enabled-[[ .ID ]]">Enabled</label>
+                    <input id="stable-event-enabled-[[ .ID ]]" type="checkbox" name="enabled" [[ if .Enabled ]]checked[[ end ]]>
+                  </div>
+                  <button type="submit" class="nd-btn-primary">Update Stable Event</button>
+                  [[ if not .BuiltIn ]]
+                  <button type="button"
+                          class="nd-btn-danger"
+                          data-eventic-delete="DELETE /api/stable-events/[[ .ID ]]">Delete Stable Event</button>
+                  [[ end ]]
+                </form>
+              </div>
+            </article>
+            [[ end ]]
+          </section>
+          [[ end ]]
+        </section>
+        [[ end ]]
+
+        [[ if .ShowMapper ]]
         <section class="nd-panel" id="event-mapper">
           <header class="nd-panel-header">
             <h2>Event Mapper</h2>
@@ -161,32 +250,6 @@
               <header class="nd-panel-header">
                 <h3>Stable Events</h3>
               </header>
-              <form data-eventic-action="POST /api/stable-events">
-                <div class="nd-grid nd-grid-2">
-                  <div class="nd-form-group">
-                    <label for="stable-event-key">Event</label>
-                    <input id="stable-event-key" name="event" placeholder="catchall" required>
-                  </div>
-                  <div class="nd-form-group">
-                    <label for="stable-event-title">Title</label>
-                    <input id="stable-event-title" name="title" placeholder="Catch All" required>
-                  </div>
-                  <div class="nd-form-group">
-                    <label for="stable-event-group">Group</label>
-                    <input id="stable-event-group" name="group" value="Custom" required>
-                  </div>
-                </div>
-                <div class="nd-form-group">
-                  <label for="stable-event-description">Description</label>
-                  <textarea id="stable-event-description" name="description" rows="3"></textarea>
-                </div>
-                <div class="nd-form-group">
-                  <label for="stable-event-enabled">Enabled</label>
-                  <input id="stable-event-enabled" type="checkbox" name="enabled" checked>
-                </div>
-                <button type="submit" class="nd-btn-primary">Create Stable Event</button>
-              </form>
-
               [[ range .StableGroups ]]
               <section class="nd-panel">
                 <header class="nd-panel-header">
@@ -196,38 +259,13 @@
                 <div class="nd-well"
                      data-eventic-drop-zone
                      data-stable-event="[[ .Event ]]">
-                  <form data-eventic-action="PUT /api/stable-events/[[ .ID ]]">
-                    <div class="nd-grid nd-grid-2">
-                      <div class="nd-form-group">
-                        <label for="stable-event-value-[[ .ID ]]">Event</label>
-                        <input id="stable-event-value-[[ .ID ]]" name="event" value="[[ .Event ]]" [[ if .BuiltIn ]]readonly[[ end ]] required>
-                      </div>
-                      <div class="nd-form-group">
-                        <label for="stable-event-title-[[ .ID ]]">Title</label>
-                        <input id="stable-event-title-[[ .ID ]]" name="title" value="[[ .Title ]]" required>
-                      </div>
-                      <div class="nd-form-group">
-                        <label for="stable-event-group-[[ .ID ]]">Group</label>
-                        <input id="stable-event-group-[[ .ID ]]" name="group" value="[[ .Group ]]" required>
-                      </div>
-                    </div>
-                    <div class="nd-form-group">
-                      <label for="stable-event-description-[[ .ID ]]">Description</label>
-                      <textarea id="stable-event-description-[[ .ID ]]" name="description" rows="3">[[ .Description ]]</textarea>
-                    </div>
-                    <div class="nd-form-group">
-                      <label for="stable-event-enabled-[[ .ID ]]">Enabled</label>
-                      <input id="stable-event-enabled-[[ .ID ]]" type="checkbox" name="enabled" [[ if .Enabled ]]checked[[ end ]]>
-                    </div>
-                    <button type="submit" class="nd-btn-primary">Update Stable Event</button>
-                    [[ if not .BuiltIn ]]
-                    <button type="button"
-                            class="nd-btn-danger"
-                            data-eventic-delete="DELETE /api/stable-events/[[ .ID ]]">Delete Stable Event</button>
-                    [[ end ]]
-                  </form>
-
-                  <p><span class="nd-badge nd-badge-info">[[ .Event ]]</span></p>
+                  <header class="nd-card-header">
+                    <h5 class="nd-card-title">[[ .Title ]]</h5>
+                    <span class="nd-badge nd-badge-info">[[ .Event ]]</span>
+                  </header>
+                  [[ if .Description ]]
+                  <p>[[ .Description ]]</p>
+                  [[ end ]]
                   [[ if .Mappings ]]
                   <table class="nd-table-striped nd-table-hover">
                     <thead>
@@ -254,7 +292,7 @@
                     </tbody>
                   </table>
                   [[ else ]]
-                  <p data-eventic-empty-drop>Drop provider events here.</p>
+                  <p data-eventic-empty-drop>No provider events mapped.</p>
                   [[ end ]]
                 </div>
                 [[ end ]]
@@ -263,7 +301,9 @@
             </section>
           </div>
         </section>
+        [[ end ]]
 
+        [[ if .ShowAdvanced ]]
         <section class="nd-panel" id="event-mappings">
           <header class="nd-panel-header">
             <h2>Advanced Mappings</h2>
@@ -320,10 +360,6 @@
                     <input id="mapping-provider-[[ .ID ]]" name="provider" value="[[ .Provider ]]" required>
                   </div>
                   <div class="nd-form-group">
-                    <label for="mapping-id-[[ .ID ]]">Mapping ID</label>
-                    <input id="mapping-id-[[ .ID ]]" name="mapping_id" value="[[ .MappingID ]]">
-                  </div>
-                  <div class="nd-form-group">
                     <label for="mapping-target-[[ .ID ]]">Stable Event</label>
                     <input id="mapping-target-[[ .ID ]]" name="target_stable_event" list="stable-event-options" value="[[ .TargetStableEvent ]]" required>
                   </div>
@@ -350,7 +386,9 @@
           [[ end ]]
         </section>
         [[ end ]]
+        [[ end ]]
 
+        [[ if .ShowWorkflows ]]
         <section class="nd-panel" id="workflow-create">
           <header class="nd-panel-header">
             <h2>New Workflow</h2>
@@ -895,6 +933,7 @@
             [[ end ]]
           </div>
         </section>
+        [[ end ]]
       </main>
     </div>
   </div>

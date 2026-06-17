@@ -305,6 +305,9 @@ func webMux(cfg Config, logStore *ExecutionLog, projectStore *ProjectStore, repl
 	// embedded Go-template dashboard. The store is passed so the left-nav
 	// hierarchy can be server-rendered on each request.
 	mux.Handle("/global", configurationHandler(projectStore))
+	mux.Handle("/global/events", configurationHandler(projectStore))
+	mux.Handle("/global/mappings", configurationHandler(projectStore))
+	mux.Handle("/global/mappings/advanced", configurationHandler(projectStore))
 	mux.Handle("/{org}/{repo}", configurationHandler(projectStore))
 	mux.Handle("/", indexHandler(cfg, projectStore))
 

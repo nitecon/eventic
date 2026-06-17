@@ -73,15 +73,29 @@ content:
     - name: Configure global workflows
       steps:
         - Open `GET /global` for all-repository workflow defaults.
-        - The global configuration page also preserves the stable repository sidebar and the same top-label form control pattern used by repository configuration pages.
+        - The global workflow page also preserves the stable repository sidebar and the same top-label form control pattern used by repository configuration pages.
         - Existing workflows are loaded from `GET /api/workflow-config?scope=global`.
         - Create global workflows with `POST /api/workflow-config?scope=global`.
         - Global workflow forms use the same selected `event_type`, typed step, result evaluation, and response handling contract as repository workflows.
-        - The same page exposes stable event registry and mapping configuration. The visual mapper shows provider events in the left column and grouped stable events in the right column; dropping a provider event onto a stable event creates a mapping through `POST /api/event-mappings`.
+    - name: Configure stable events
+      steps:
+        - Open `GET /global/events` for the stable internal event registry.
+        - This page is for creating and editing stable event definitions only; it does not render workflow forms, provider event cards, drag/drop targets, or advanced mapping forms.
         - Stable events are loaded from `GET /api/stable-events`, created with `POST /api/stable-events`, updated with `PUT /api/stable-events/{id}`, and custom events are deleted with `DELETE /api/stable-events/{id}`. Built-in stable event keys cannot be renamed or deleted, but their display metadata can be edited.
+    - name: Configure visual event mappings
+      steps:
+        - Open `GET /global/mappings` for the provider-to-stable-event drag/drop mapper.
+        - The visual mapper shows provider events in the left column and grouped stable event drop targets in the right column; it does not render stable event edit forms, workflow forms, or advanced condition editors.
         - Provider palette rows are loaded from `GET /api/provider-events?provider=PROVIDER`; provider filter `all` returns the whole catalog.
+        - Dropping a provider event onto a stable event creates a mapping through `POST /api/event-mappings`.
+        - Mapping IDs for user-created mappings are generated server-side as UUID strings; visual mapper payloads should omit `mapping_id`.
+    - name: Configure advanced event mappings
+      steps:
+        - Open `GET /global/mappings/advanced` for direct mapping CRUD and condition JSON editing.
+        - This page is for advanced mapping configuration only; it does not render workflow forms, stable event creation/edit forms, or drag/drop provider cards.
         - Mappings are loaded from `GET /api/event-mappings`, created with `POST /api/event-mappings`, updated with `PUT /api/event-mappings/{id}`, and deleted with `DELETE /api/event-mappings/{id}`.
         - Mapping payloads use `provider`, `name`, `enabled`, `priority`, `conditions` or `conditions_text`, and `target_stable_event`. A provider value of `*` applies to every provider. Conditions can match `event`, `action`, `ref`, `repo`, `sender`, `headers.Name`, `metadata.name`, or `body.path` values, including glob values like `refs/tags/*` and array wildcards like `body.vulnerabilities[].severity`.
+        - New mapping payloads should omit `mapping_id`; the server generates a UUID mapping ID. Update payloads may omit `mapping_id`, in which case the existing value is preserved.
         - Default mappings include `artifact.initiate`, `artifact.published`, `system.failure`, `security.alarm`, and `communication.received`.
         - Runtime workflow resolution uses `StableEvent` with no action suffix when normalization matched; otherwise it preserves legacy repo/action, repo/event, global/action, global/event precedence.
     - name: Ingest provider webhooks

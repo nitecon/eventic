@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/nitecon/eventic/protocol"
 	"github.com/rs/zerolog/log"
 )
@@ -1107,6 +1108,9 @@ func eventMappingsCollectionHandler(store *ProjectStore) http.HandlerFunc {
 				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
 				return
 			}
+			if mapping.MappingID == "" {
+				mapping.MappingID = nextEventMappingID()
+			}
 			id, err := store.CreateEventMapping(r.Context(), mapping)
 			if err != nil {
 				globalError(w, http.StatusInternalServerError, "failed to create event mapping")
@@ -1138,6 +1142,18 @@ func eventMappingItemHandler(store *ProjectStore) http.HandlerFunc {
 				return
 			}
 			mapping.ID = id
+			if mapping.MappingID == "" {
+				existing, err := store.GetEventMapping(r.Context(), id)
+				if isNotFound(err) {
+					globalError(w, http.StatusNotFound, "event mapping not found")
+					return
+				}
+				if err != nil {
+					globalError(w, http.StatusInternalServerError, "failed to load event mapping")
+					return
+				}
+				mapping.MappingID = existing.MappingID
+			}
 			err := store.UpdateEventMapping(r.Context(), mapping)
 			if isNotFound(err) {
 				globalError(w, http.StatusNotFound, "event mapping not found")
@@ -1181,9 +1197,6 @@ func eventMappingFromRequest(r *http.Request) (*EventMapping, map[string]string)
 		Conditions:        conditions,
 		TargetStableEvent: strings.TrimSpace(req.TargetStableEvent),
 	}
-	if mapping.MappingID == "" {
-		mapping.MappingID = nextEventMappingID(mapping.Provider, mapping.TargetStableEvent)
-	}
 	if mapping.Priority == 0 {
 		mapping.Priority = 50
 	}
@@ -1216,12 +1229,8 @@ func validateEventMapping(mapping *EventMapping) map[string]string {
 	return errs
 }
 
-func nextEventMappingID(provider, target string) string {
-	base := strings.Trim(provider+"_"+strings.ReplaceAll(target, ".", "_"), "_")
-	if base == "" {
-		base = "event_mapping"
-	}
-	return "map_" + base + "_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+func nextEventMappingID() string {
+	return uuid.NewString()
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────

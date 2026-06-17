@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nitecon/eventic/protocol"
 )
 
@@ -86,7 +87,7 @@ func TestWebMuxRoutePatternsDoNotConflict(t *testing.T) {
 	defer store.Close()
 
 	mux := webMux(Config{}, NewExecutionLog(WebConfig{}), store, func(context.Context, protocol.EventMsg) {})
-	for _, path := range []string{"/", "/global", "/api/projects"} {
+	for _, path := range []string{"/", "/global", "/global/events", "/global/mappings", "/global/mappings/advanced", "/api/projects"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -712,6 +713,37 @@ func TestProviderEventsAPIFiltersProvider(t *testing.T) {
 		if event.Provider != "prometheus" {
 			t.Fatalf("expected prometheus event only, got %#v", event)
 		}
+	}
+}
+
+func TestEventMappingsAPIGeneratesUUIDMappingID(t *testing.T) {
+	store := newTestStore(t)
+	body := `{"provider":"github","name":"Push to initiate","enabled":true,"priority":50,"conditions":{"event":"push"},"target_stable_event":"artifact.initiate"}`
+	rec := httptest.NewRecorder()
+	eventMappingsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/event-mappings", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var mapping EventMapping
+	if err := json.Unmarshal(rec.Body.Bytes(), &mapping); err != nil {
+		t.Fatalf("decode event mapping: %v", err)
+	}
+	if _, err := uuid.Parse(mapping.MappingID); err != nil {
+		t.Fatalf("expected UUID mapping_id, got %q: %v", mapping.MappingID, err)
+	}
+	originalMappingID := mapping.MappingID
+
+	update := `{"provider":"github","name":"Updated push","enabled":true,"priority":60,"conditions":{"event":"push","ref":"refs/heads/main"},"target_stable_event":"artifact.initiate"}`
+	rec = httptest.NewRecorder()
+	eventMappingItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/event-mappings/%d", mapping.ID), strings.NewReader(update)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &mapping); err != nil {
+		t.Fatalf("decode updated event mapping: %v", err)
+	}
+	if mapping.MappingID != originalMappingID {
+		t.Fatalf("expected update to preserve mapping_id %q, got %q", originalMappingID, mapping.MappingID)
 	}
 }
 

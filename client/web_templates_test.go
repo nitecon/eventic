@@ -222,11 +222,9 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		`id="repo-nav-list"`,
 		`href="/nitecon/alpha"`,
 		`href="/nitecon/beta"`,
-		`id="event-mapper"`,
-		`data-eventic-provider-event`,
-		`data-eventic-drop-zone`,
-		`data-eventic-provider-filter`,
-		`data-eventic-action="POST /api/stable-events"`,
+		`href="/global/events"`,
+		`href="/global/mappings"`,
+		`href="/global/mappings/advanced"`,
 		`for="workflow-continue-on-error"`,
 		`id="workflow-continue-on-error" type="checkbox"`,
 		`name="action_type"`,
@@ -246,9 +244,143 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		`id="workflow-step-name"`,
 		`class="nd-checkbox"`,
 		`<span class="nd-nav-section">Navigation</span>`,
+		`id="event-mapper"`,
+		`id="stable-events-management"`,
+		`id="event-mappings"`,
+		`draggable="true"
+                         data-eventic-provider-event`,
+		`<div class="nd-well"
+                     data-eventic-drop-zone`,
+		`<select id="provider-event-filter" data-eventic-provider-filter>`,
+		`data-eventic-action="POST /api/stable-events"`,
 	} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("expected global configuration page not to contain redundant label %q", unwanted)
+		}
+	}
+}
+
+func TestConfigurationTemplateStableEventsPage(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/global/events", nil)
+	req.Host = "localhost:16384"
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"Stable Events",
+		`id="stable-events-management"`,
+		`data-eventic-action="POST /api/stable-events"`,
+		`data-eventic-action="PUT /api/stable-events/`,
+		`href="/global"`,
+		`href="/global/mappings"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("expected stable events page to contain %q", expected)
+		}
+	}
+	for _, unwanted := range []string{
+		`id="workflow-create"`,
+		`id="workflow-configuration"`,
+		`id="event-mapper"`,
+		`id="event-mappings"`,
+		`draggable="true"
+                         data-eventic-provider-event`,
+		`<div class="nd-well"
+                     data-eventic-drop-zone`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("expected stable events page not to contain %q", unwanted)
+		}
+	}
+}
+
+func TestConfigurationTemplateVisualMapperPage(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/global/mappings", nil)
+	req.Host = "localhost:16384"
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"Event Mapper",
+		`id="event-mapper"`,
+		`id="provider-events"`,
+		`id="stable-event-targets"`,
+		`draggable="true"
+                         data-eventic-provider-event`,
+		`<div class="nd-well"
+                     data-eventic-drop-zone`,
+		`data-eventic-provider-filter`,
+		`href="/global/events"`,
+		`href="/global/mappings/advanced"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("expected visual mapper page to contain %q", expected)
+		}
+	}
+	for _, unwanted := range []string{
+		`id="workflow-create"`,
+		`id="workflow-configuration"`,
+		`id="stable-events-management"`,
+		`id="event-mappings"`,
+		`data-eventic-action="POST /api/stable-events"`,
+		`data-eventic-action="PUT /api/stable-events/`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("expected visual mapper page not to contain %q", unwanted)
+		}
+	}
+}
+
+func TestConfigurationTemplateAdvancedMappingsPage(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/global/mappings/advanced", nil)
+	req.Host = "localhost:16384"
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"Advanced Mappings",
+		`id="event-mappings"`,
+		`data-eventic-action="POST /api/event-mappings"`,
+		`data-eventic-action="PUT /api/event-mappings/`,
+		`for="mapping-conditions"`,
+		`href="/global/mappings"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("expected advanced mappings page to contain %q", expected)
+		}
+	}
+	for _, unwanted := range []string{
+		`id="workflow-create"`,
+		`id="workflow-configuration"`,
+		`id="stable-events-management"`,
+		`id="event-mapper"`,
+		`draggable="true"
+                         data-eventic-provider-event`,
+		`<div class="nd-well"
+                     data-eventic-drop-zone`,
+		`name="mapping_id"`,
+		`for="mapping-id-`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("expected advanced mappings page not to contain %q", unwanted)
 		}
 	}
 }
