@@ -53,6 +53,10 @@ type ExecutionEvent struct {
 	Repo           string          `json:"repo"`
 	Ref            string          `json:"ref,omitempty"`
 	Event          string          `json:"event"`
+	StableEvent    string          `json:"stable_event,omitempty"`
+	Provider       string          `json:"provider,omitempty"`
+	ExternalEvent  string          `json:"external_event,omitempty"`
+	ExternalAction string          `json:"external_action,omitempty"`
 	Action         string          `json:"action,omitempty"`
 	Sender         string          `json:"sender,omitempty"`
 	State          string          `json:"state"`
@@ -104,16 +108,20 @@ func NewExecutionLog(cfg WebConfig) *ExecutionLog {
 func (l *ExecutionLog) StartEvent(event protocol.EventMsg) ExecutionEvent {
 	now := time.Now()
 	rec := ExecutionEvent{
-		ID:         event.DeliveryID,
-		DeliveryID: event.DeliveryID,
-		Repo:       event.Repo,
-		Ref:        event.Ref,
-		Event:      event.GitHubEvent,
-		Action:     event.Action,
-		Sender:     event.Sender,
-		State:      "running",
-		StartedAt:  now,
-		UpdatedAt:  now,
+		ID:             event.DeliveryID,
+		DeliveryID:     event.DeliveryID,
+		Repo:           event.Repo,
+		Ref:            event.Ref,
+		Event:          eventLabel(event),
+		StableEvent:    event.StableEvent,
+		Provider:       eventProvider(event),
+		ExternalEvent:  firstNonEmpty(event.ExternalEvent, event.GitHubEvent),
+		ExternalAction: firstNonEmpty(event.ExternalAction, event.Action),
+		Action:         event.Action,
+		Sender:         event.Sender,
+		State:          "running",
+		StartedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	l.mu.Lock()
@@ -306,6 +314,9 @@ func webMux(cfg Config, logStore *ExecutionLog, projectStore *ProjectStore, repl
 	mux.HandleFunc("/api/workflow-config", workflowConfigCollectionHandler(projectStore))
 	mux.HandleFunc("/api/workflow-config/", workflowConfigItemHandler(projectStore))
 	mux.HandleFunc("/api/event-types", eventTypesHandler())
+	mux.HandleFunc("/api/stable-events", stableEventsHandler())
+	mux.HandleFunc("/api/event-mappings", eventMappingsCollectionHandler(projectStore))
+	mux.HandleFunc("/api/event-mappings/", eventMappingItemHandler(projectStore))
 	mux.HandleFunc("/api/projects", apiProjectsHandler(projectStore))
 	mux.HandleFunc("/api/projects/", apiProjectsHandler(projectStore))
 	mux.HandleFunc("/api/refs", apiRefsHandler(cfg))

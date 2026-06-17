@@ -2,6 +2,7 @@ package client
 
 import (
 	"embed"
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"os"
@@ -50,20 +51,27 @@ type dashboardView struct {
 }
 
 type configurationView struct {
-	Brand       string
-	Title       string
-	Scope       string
-	Repo        string
-	Owner       string
-	Name        string
-	IsGlobal    bool
-	Project     *ProjectState
-	Workflows   []workflowConfig
-	Events      []selectOption
-	Actions     []selectOption
-	PostActions []selectOption
-	Responses   []selectOption
-	Methods     []selectOption
+	Brand         string
+	Title         string
+	Scope         string
+	Repo          string
+	Owner         string
+	Name          string
+	IsGlobal      bool
+	Project       *ProjectState
+	Workflows     []workflowConfig
+	Events        []selectOption
+	Actions       []selectOption
+	PostActions   []selectOption
+	Responses     []selectOption
+	Methods       []selectOption
+	StableEvents  []StableEventDefinition
+	EventMappings []eventMappingConfig
+}
+
+type eventMappingConfig struct {
+	EventMapping
+	ConditionsText string
 }
 
 // indexHandler serves the dashboard at "/". When StaticDir contains an
@@ -134,18 +142,24 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 	}
 
 	view := configurationView{
-		Brand:       "Eventic",
-		Scope:       scope,
-		Repo:        repo,
-		IsGlobal:    scope == WorkflowScopeGlobal,
-		Events:      workflowEventOptions(),
-		Actions:     workflowActionOptions(),
-		PostActions: workflowPostActionOptions(),
-		Responses:   workflowResponseOptions(),
-		Methods:     workflowHTTPMethodOptions(),
+		Brand:        "Eventic",
+		Scope:        scope,
+		Repo:         repo,
+		IsGlobal:     scope == WorkflowScopeGlobal,
+		Events:       workflowEventOptions(),
+		Actions:      workflowActionOptions(),
+		PostActions:  workflowPostActionOptions(),
+		Responses:    workflowResponseOptions(),
+		Methods:      workflowHTTPMethodOptions(),
+		StableEvents: StableEventDefinitions(),
 	}
 	if view.IsGlobal {
 		view.Title = "Global Workflows"
+		mappings, err := store.ListEventMappings(r.Context())
+		if err != nil {
+			return configurationView{}, true, err
+		}
+		view.EventMappings = eventMappingConfigs(mappings)
 	} else {
 		view.Owner, view.Name = splitRepoName(repo)
 		view.Title = repo
@@ -162,6 +176,18 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 	}
 	view.Workflows = workflows
 	return view, true, nil
+}
+
+func eventMappingConfigs(mappings []EventMapping) []eventMappingConfig {
+	configs := make([]eventMappingConfig, 0, len(mappings))
+	for _, mapping := range mappings {
+		data, _ := json.MarshalIndent(mapping.Conditions, "", "  ")
+		configs = append(configs, eventMappingConfig{
+			EventMapping:   mapping,
+			ConditionsText: string(data),
+		})
+	}
+	return configs
 }
 
 func configurationRoute(path string) (string, string, bool) {

@@ -29,17 +29,23 @@ type SubscribeMsg struct {
 
 // EventMsg sent by server to client when a webhook arrives.
 type EventMsg struct {
-	MsgType     string          `json:"MsgType"`
-	DeliveryID  string          `json:"DeliveryID"`
-	GitHubEvent string          `json:"GitHubEvent"`
-	Repo        string          `json:"Repo"`
-	Ref         string          `json:"Ref,omitempty"`
-	Action      string          `json:"Action,omitempty"`
-	Sender      string          `json:"Sender,omitempty"`
-	Message     string          `json:"Message,omitempty"`
-	CloneURL    string          `json:"CloneURL"`
-	PRNumber    int             `json:"PRNumber,omitempty"`
-	Payload     json.RawMessage `json:"Payload"`
+	MsgType        string            `json:"MsgType"`
+	DeliveryID     string            `json:"DeliveryID"`
+	GitHubEvent    string            `json:"GitHubEvent"`
+	Provider       string            `json:"Provider,omitempty"`
+	StableEvent    string            `json:"StableEvent,omitempty"`
+	ExternalEvent  string            `json:"ExternalEvent,omitempty"`
+	ExternalAction string            `json:"ExternalAction,omitempty"`
+	Repo           string            `json:"Repo"`
+	Ref            string            `json:"Ref,omitempty"`
+	Action         string            `json:"Action,omitempty"`
+	Sender         string            `json:"Sender,omitempty"`
+	Message        string            `json:"Message,omitempty"`
+	CloneURL       string            `json:"CloneURL"`
+	PRNumber       int               `json:"PRNumber,omitempty"`
+	Headers        map[string]string `json:"Headers,omitempty"`
+	Metadata       map[string]string `json:"Metadata,omitempty"`
+	Payload        json.RawMessage   `json:"Payload"`
 }
 
 // StatusMsg sent by client after processing an event.

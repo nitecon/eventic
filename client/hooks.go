@@ -81,6 +81,9 @@ func shouldRunGlobalHook(eventType, action string, allowedPatterns, ignorePatter
 
 // eventLabel returns "event.action" when an action is present, otherwise just "event".
 func eventLabel(event protocol.EventMsg) string {
+	if event.StableEvent != "" {
+		return event.StableEvent
+	}
 	if event.Action != "" {
 		return event.GitHubEvent + "." + event.Action
 	}
@@ -97,7 +100,11 @@ func buildHookEnv(repoPath string, event protocol.EventMsg, extra ...string) []s
 		"EVENTIC_REPO="+event.Repo,
 		"EVENTIC_REPOS="+reposRootForHook(repoPath, event.Repo),
 		"EVENTIC_REF="+event.Ref,
-		"EVENTIC_EVENT="+event.GitHubEvent,
+		"EVENTIC_EVENT="+workflowEventType(event),
+		"EVENTIC_STABLE_EVENT="+event.StableEvent,
+		"EVENTIC_PROVIDER="+eventProvider(event),
+		"EVENTIC_EXTERNAL_EVENT="+firstNonEmpty(event.ExternalEvent, event.GitHubEvent),
+		"EVENTIC_EXTERNAL_ACTION="+firstNonEmpty(event.ExternalAction, event.Action),
 		"EVENTIC_ACTION="+event.Action,
 		"EVENTIC_SENDER="+event.Sender,
 		"EVENTIC_MESSAGE="+event.Message,

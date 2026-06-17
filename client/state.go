@@ -560,9 +560,25 @@ func (s *ProjectStore) migrate(ctx context.Context) error {
 			duration_ms INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_run ON workflow_run_nodes(run_id);
+		CREATE TABLE IF NOT EXISTS event_mappings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			mapping_id TEXT NOT NULL UNIQUE,
+			provider TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			priority INTEGER NOT NULL DEFAULT 0,
+			conditions TEXT NOT NULL DEFAULT '{}',
+			target_stable_event TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_event_mappings_priority ON event_mappings(priority DESC, mapping_id);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate state db: %w", err)
+	}
+	if err := s.seedDefaultEventMappings(ctx); err != nil {
+		return fmt.Errorf("seed stable event mappings: %w", err)
 	}
 	return nil
 }

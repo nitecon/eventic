@@ -230,6 +230,26 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		Str("ref", event.Ref).
 		Msg("processing event")
 
+	var normalized NormalizedEvent
+	normalizedEvent, normalized, err := NormalizeInboundEvent(ctx, projectStore, event)
+	if err != nil {
+		log.Error().Err(err).Str("repo", event.Repo).Str("event", eventLabel(event)).Msg("event normalization failed")
+		writeStatus(ctx, conn, protocol.StatusMsg{
+			MsgType:     "Status",
+			DeliveryID:  event.DeliveryID,
+			State:       "failure",
+			Description: err.Error(),
+		})
+		return
+	}
+	event = normalizedEvent
+	log.Debug().
+		Str("repo", event.Repo).
+		Str("source", normalized.Source).
+		Str("stable_event", normalized.StableEvent).
+		Str("external_event", firstNonEmpty(event.ExternalEvent, event.GitHubEvent)).
+		Msg("event normalized")
+
 	state := "success"
 	desc := ""
 	startedEvent := webLog.StartEvent(event)
@@ -299,7 +319,7 @@ func sendNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookNa
 
 	n := notifier.Notification{
 		Repo:       event.Repo,
-		Event:      event.GitHubEvent,
+		Event:      workflowEventType(event),
 		Action:     event.Action,
 		HookName:   hookName,
 		Message:    message,
@@ -319,7 +339,7 @@ func sendNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookNa
 // "failure", or "skipped") and a human-readable description. It never panics on
 // a missing workflow — that is a benign "skipped" outcome.
 func runEventWorkflow(ctx context.Context, cfg Config, event protocol.EventMsg, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore, replay ReplayDispatcher) (state, desc string) {
-	wf, err := projectStore.ResolveWorkflow(ctx, event.Repo, event.GitHubEvent, event.Action)
+	wf, err := projectStore.ResolveWorkflow(ctx, event.Repo, workflowEventType(event), workflowEventAction(event))
 	if err != nil {
 		log.Error().Err(err).Str("repo", event.Repo).Str("event", eventLabel(event)).Msg("workflow resolution failed")
 		return "failure", err.Error()

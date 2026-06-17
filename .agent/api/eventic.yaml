@@ -1,6 +1,6 @@
 app: eventic
 title: Eventic API agent context
-summary: Agent-facing context for Eventic's ndesign dashboard, repository configuration routes, workflow APIs, and run/event streams.
+summary: Agent-facing context for Eventic's ndesign dashboard, stable event routing, repository configuration routes, workflow APIs, and run/event streams.
 kind: agent_context
 source_format: agent_context
 source_ref: .agent/api/eventic.yaml
@@ -9,20 +9,26 @@ labels:
   - eventic
   - go
   - dashboard
+  - stable-events
+  - webhooks
   - workflow-engine
   - ndesign
 content:
   purpose: >
-    Eventic is a per-repository DAG workflow engine for GitHub events. The
-    client persists known repositories, workflow definitions, workflow runs, and
-    recent event state in SQLite, then exposes an ndesign web console for
-    repository discovery, global workflow configuration, repository workflow
-    configuration, manual replay, and live run/event monitoring.
+    Eventic is a per-repository DAG workflow engine for provider webhooks and
+    stable internal events. The client persists known repositories, stable event
+    mappings, workflow definitions, workflow runs, and recent event state in
+    SQLite, then exposes an ndesign web console for repository discovery, global
+    workflow and event mapping configuration, repository workflow configuration,
+    manual replay, and live run/event monitoring.
   source_documents:
     - README.md
     - docs/Workflows.md
     - client/state.go
+    - client/stable_events.go
+    - client/stable_event_store.go
     - client/workflow_store.go
+    - server/server.go
     - client/web.go
     - client/web_api.go
     - client/web_templates.go
@@ -47,7 +53,7 @@ content:
         - Append a typed step with `POST /api/workflow-config/{id}/steps`.
         - Update a typed step with `PUT /api/workflow-config/{id}/steps/{node_key}`.
         - Delete a typed step with `DELETE /api/workflow-config/{id}/steps/{node_key}`; the configuration endpoint maintains a simple success-edge chain for this editor path.
-        - "`event_type` is selected from `GET /api/event-types` values, such as `push`, `pull_request.opened`, or `comms`."
+        - "`event_type` is selected from `GET /api/event-types` values, such as `artifact.initiate`, `security.alarm`, `push`, `pull_request.opened`, or `comms`."
         - The compatibility API still accepts a newline-delimited `steps` field where each line is either a shell command or `Display name | shell command`; those lines become sequential `run_command` nodes linked by success edges.
         - The typed config path accepts either `typed_steps` or a flat initial step on create. Supported `action_type` values are `run_command`, `send_http_request`, `send_project_message`, and `trigger_project_event`.
         - The configuration UI treats step names as optional implementation detail: create/append forms do not ask for a separate step name, and existing step labels are preserved through hidden fields. The action select progressively shows only fields relevant to the selected action, response mode, and post action.
@@ -64,14 +70,25 @@ content:
         - Existing workflows are loaded from `GET /api/workflow-config?scope=global`.
         - Create global workflows with `POST /api/workflow-config?scope=global`.
         - Global workflow forms use the same selected `event_type`, typed step, result evaluation, and response handling contract as repository workflows.
-        - Runtime workflow resolution still prefers repo/action, then repo/event, then global/action, then global/event.
+        - The same page exposes stable event mapping configuration. Mappings are loaded from `GET /api/event-mappings`, created with `POST /api/event-mappings`, updated with `PUT /api/event-mappings/{id}`, and deleted with `DELETE /api/event-mappings/{id}`.
+        - Mapping payloads use `provider`, `name`, `enabled`, `priority`, `conditions` or `conditions_text`, and `target_stable_event`. A provider value of `*` applies to every provider. Conditions can match `event`, `action`, `ref`, `repo`, `sender`, `headers.Name`, `metadata.name`, or `body.path` values, including array wildcards like `body.vulnerabilities[].severity`.
+        - Default mappings include `artifact.initiate`, `artifact.published`, `system.failure`, `security.alarm`, and `communication.received`.
+        - Runtime workflow resolution uses `StableEvent` with no action suffix when normalization matched; otherwise it preserves legacy repo/action, repo/event, global/action, global/event precedence.
+    - name: Ingest provider webhooks
+      steps:
+        - The public relay still accepts GitHub at `POST /webhook/github` with `X-Hub-Signature-256`.
+        - The generic ingress path is `POST /v1/webhooks/{provider}`. `github` uses the same HMAC validation; non-GitHub providers use `Authorization: Bearer <token>` checked against `EVENTIC_COMMS_TOKENS` or `EVENTIC_CLIENT_TOKENS`.
+        - Generic payloads must provide or expose a target `repo` (`org/repo`) so the relay can fan out to subscribed clients and the client can run a repository-scoped workflow.
+        - GitLab, Bitbucket, Prometheus/Alertmanager, and custom payloads are parsed into `EventMsg.Provider`, `ExternalEvent`, `ExternalAction`, `Headers`, `Metadata`, and raw `Payload`; the client then applies stable event mappings.
     - name: Use project and workflow APIs
       steps:
         - "`GET /api/projects` preserves the legacy string-array response for known repositories."
         - "`GET /api/projects?summary=1`, or any `org`/`search` query, returns `ProjectSummary` objects: `repo`, `owner`, `name`, `state`, `updated_at`."
         - "`GET /api/projects/{org}/{repo}` returns the latest `ProjectState` for that repository."
         - "`GET /api/workflows`, `POST /api/workflows`, `GET/PUT/DELETE /api/workflows/{id}` remain the raw DAG CRUD API and accept explicit nodes and edges."
-        - "`GET /api/event-types` returns GitHub webhook event/action references plus Eventic's synthetic `comms` event."
+        - "`GET /api/event-types` returns stable event keys plus GitHub webhook event/action references and Eventic's synthetic `comms` event."
+        - "`GET /api/stable-events` returns stable event catalog rows with event key, title, description, example sources, and workflow uses."
+        - "`GET/POST /api/event-mappings` and `PUT/DELETE /api/event-mappings/{id}` are the local mapping registry API."
         - "`GET /api/runs?repo=ORG/REPO&limit=N` lists runs for one repo; omitting `repo` lists recent runs across repositories."
         - "`POST /api/runs` triggers a manual replay event with `repo`, `event_type`, `ref`, and optional `message`."
         - "`GET /ws/runs` streams WebSocket run updates for ndesign rows; `/api/runs/stream` and `/events/stream` are SSE fallbacks."

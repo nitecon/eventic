@@ -4,9 +4,9 @@ Eventic was born out of pure frustration. Every GitOps tool out there assumes yo
 
 There is no simple, lightweight solution for triggering on-prem or local automation based on GitHub webhooks — so we built one.
 
-Eventic is a minimal, two-component system that bridges GitHub webhooks (and free-form agent "comms" messages) to any machine that can make an outbound WebSocket connection. No inbound ports required on your local network. No complex infrastructure. Just a relay server and a lightweight client.
+Eventic is a minimal, two-component system that bridges GitHub webhooks, provider webhooks, and free-form agent "comms" messages to any machine that can make an outbound WebSocket connection. No inbound ports required on your local network. No complex infrastructure. Just a relay server and a lightweight client.
 
-It is a **per-repo workflow engine**: when an event arrives, the client resolves a **workflow** for that repository and event type, checks out the branch, and runs a **DAG of typed action steps** with output and context flowing between nodes. Actions can run commands, send HTTP requests, send project messages, trigger project events, evaluate responses, and run post-actions over response data. Workflows are authored from the dashboard/API, not from in-repo YAML.
+It is a **per-repo workflow engine**: when an event arrives, the client normalizes provider-specific payloads into stable internal event keys, resolves a **workflow** for that repository and event type, checks out the branch, and runs a **DAG of typed action steps** with output and context flowing between nodes. Actions can run commands, send HTTP requests, send project messages, trigger project events, evaluate responses, and run post-actions over response data. Workflows are authored from the dashboard/API, not from in-repo YAML.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ GitHub ──webhook──────┐
 POST /event/comms ────┘     (public / cloud)                  (on-prem / local)
 ```
 
-1. **Server** — A lightweight relay that receives GitHub webhooks (HMAC-validated) and authenticated `comms` messages, then fans events out to connected clients over WebSocket.
+1. **Server** — A lightweight relay that receives GitHub webhooks (HMAC-validated), provider webhooks, and authenticated `comms` messages, then fans events out to connected clients over WebSocket.
 2. **Client** — A small daemon that connects to the server, listens for events matching its subscriptions, resolves a workflow from its local SQLite database (repo overrides global, per event type), checks out the relevant repo/ref, and executes the workflow DAG.
 
 ---
@@ -28,6 +28,7 @@ The server is a single static binary packaged as a Docker container. It exposes 
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/webhook/github` | POST | Receives GitHub webhooks (HMAC-SHA256 validated) |
+| `/v1/webhooks/{provider}` | POST | Receives provider webhooks; `github` uses HMAC, other providers use Bearer-token auth |
 | `/event/comms` | POST | Injects a free-form agent `comms` event (Bearer-token authenticated) |
 | `/ws` | GET | WebSocket endpoint for client connections |
 | `/healthz` | GET | Health check |
@@ -38,7 +39,7 @@ The server is a single static binary packaged as a Docker container. It exposes 
 |---|---|---|---|
 | `EVENTIC_WEBHOOK_SECRET` | Yes | — | HMAC secret configured in your GitHub webhook |
 | `EVENTIC_CLIENT_TOKENS` | Yes | — | Comma-separated list of tokens that clients use to authenticate |
-| `EVENTIC_COMMS_TOKENS` | No | falls back to `EVENTIC_CLIENT_TOKENS` | Comma-separated Bearer tokens accepted on `POST /event/comms` |
+| `EVENTIC_COMMS_TOKENS` | No | falls back to `EVENTIC_CLIENT_TOKENS` | Comma-separated Bearer tokens accepted on `POST /event/comms` and non-GitHub `/v1/webhooks/{provider}` |
 | `EVENTIC_LISTEN_ADDR` | No | `:8080` | Address and port to listen on |
 
 ### The `comms` Event
@@ -311,6 +312,35 @@ The console serves the [Workflow API](#workflow-api) plus a small set of legacy/
 
 When persistent state is enabled, SQLite stores one current row per managed repository in the `projects` table (repo name, latest event/action/delivery ID, final state, latest combined output, description, checked-out git ref and commit hash, timing fields). Authored workflows live in `workflows` / `workflow_nodes` / `workflow_edges`, and each execution is recorded in `workflow_runs` / `workflow_run_nodes` with bounded per-node output. A compatibility `project_events` history table keeps the last few delivery records per repository.
 
+### Stable Event Normalization
+
+External providers are normalized before workflow resolution. A GitHub `push`, a GitLab merge to main, a Prometheus alert, or a security scanner finding can all map to stable internal event keys. Workflows should be authored against those stable keys when provider portability matters.
+
+Default mappings are seeded into the client SQLite database and can be changed from `/global` or through the API:
+
+| Stable event | Default sources | Useful workflows |
+|---|---|---|
+| `artifact.initiate` | GitHub `push` on `refs/heads/main` | Build an artifact, start security scans, notify engineering |
+| `artifact.published` | GitHub `release.published` | Promote an already-built artifact, restart services, start smoke tests |
+| `system.failure` | GitHub failed `workflow_run`, Prometheus firing alert | Notify a project, correlate with recent deploys, page or roll back |
+| `security.alarm` | GitHub `dependabot_alert.created`, critical scan finding | Mark artifact tainted, open a ticket, notify security owners |
+| `communication.received` | Eventic `comms` or custom message webhook | Route agent/application messages into a workflow |
+
+Mapping conditions are JSON objects. Keys can reference provider fields (`event`, `action`, `ref`, `repo`, `sender`), headers (`headers.X-GitHub-Event`), metadata (`metadata.severity`), or payload paths (`body.workflow_run.conclusion`, `body.vulnerabilities[].severity`). Values match case-insensitively; `*` matches any value. A mapping provider of `*` applies to every provider.
+
+```json
+{
+  "provider": "github",
+  "conditions": {
+    "event": "push",
+    "ref": "refs/heads/main"
+  },
+  "target_stable_event": "artifact.initiate"
+}
+```
+
+Non-GitHub provider payloads must include or expose a target `repo` (`org/repo`) so the relay can route to subscribed clients and the workflow runner has a checkout context. Prometheus-style hooks can provide `commonLabels.repo`; custom hooks can provide a top-level `repo`.
+
 For Kubernetes clients, mount persistent storage at `/opt/eventic/state` or set `state.path` to a path inside your own volume mount:
 
 ```yaml
@@ -349,7 +379,7 @@ subscribe:
 
 > **Event filtering is workflow resolution.** Earlier releases used `global-ignore-*` / `global-allowed-*` lists to gate a global hook. There are no global hooks anymore: an event runs a workflow only if one is resolved for its `(scope, repo, event_type)` slot (repo overrides global). To "ignore" an event, simply don't author a workflow for it; to act on it for every repo, author a `global`-scope workflow. See [Workflows](#workflows) and [docs/Workflows.md](docs/Workflows.md).
 
-> **Tip:** For a full list of GitHub webhook event types and their actions (the values you pick when authoring a workflow), see `client/github_events.go` in the source, the [GitHub webhook documentation](https://docs.github.com/en/webhooks/webhook-events-and-payloads), or `GET /api/event-types` (which also includes `comms`).
+> **Tip:** For stable workflow event keys and GitHub webhook references, use `GET /api/event-types` or the `/global` dashboard. The GitHub source reference still lives in `client/github_events.go` and the [GitHub webhook documentation](https://docs.github.com/en/webhooks/webhook-events-and-payloads).
 
 ### Systemd Service
 
@@ -422,7 +452,11 @@ Every node command receives the standard `EVENTIC_*` environment, the comms mess
 | `EVENTIC_REPOS` | Root directory containing managed repositories (e.g., `/opt/eventic/repos`) |
 | `EVENTIC_REPO` | Full repository name (e.g., `org/repo`) |
 | `EVENTIC_REF` | Git ref (branch name, tag, or PR ref) |
-| `EVENTIC_EVENT` | Event type (`push`, `pull_request`, `comms`, …) |
+| `EVENTIC_EVENT` | Stable event when mapped, otherwise the external event type |
+| `EVENTIC_STABLE_EVENT` | Stable internal event key, when a mapping matched |
+| `EVENTIC_PROVIDER` | Inbound provider (`github`, `gitlab`, `prometheus`, `custom`, etc.) |
+| `EVENTIC_EXTERNAL_EVENT` | Provider event name before normalization |
+| `EVENTIC_EXTERNAL_ACTION` | Provider action before normalization |
 | `EVENTIC_ACTION` | Event action (e.g., `opened`, `synchronize`) |
 | `EVENTIC_SENDER` | Who triggered the event |
 | `EVENTIC_MESSAGE` | Free-form payload from a `comms` event (empty for GitHub events) |
@@ -463,7 +497,12 @@ When `web.enabled` is true the client exposes a JSON/WS API for authoring workfl
 | `POST` | `/api/workflow-config/{id}/steps` | Append a typed step to a configured workflow |
 | `PUT` | `/api/workflow-config/{id}/steps/{node_key}` | Update one typed step |
 | `DELETE` | `/api/workflow-config/{id}/steps/{node_key}` | Delete one typed step |
-| `GET` | `/api/event-types` | Reference event list (GitHub events **plus `comms`**) for editor dropdowns |
+| `GET` | `/api/event-types` | Reference event list (stable events, GitHub events, and `comms`) for editor dropdowns |
+| `GET` | `/api/stable-events` | Stable event catalog with example sources and workflow uses |
+| `GET` | `/api/event-mappings` | List provider-to-stable-event mappings |
+| `POST` | `/api/event-mappings` | Create a mapping `{provider, name, enabled, priority, conditions|conditions_text, target_stable_event}` |
+| `PUT` | `/api/event-mappings/{id}` | Update one mapping |
+| `DELETE` | `/api/event-mappings/{id}` | Delete one mapping |
 | `GET` | `/api/projects`, `/api/projects/{repo}` | Managed-project summaries |
 | `GET` | `/api/refs?repo=org/repo` | Local branch/tag refs for the repo |
 | `GET` | `/api/runs?repo=&workflow=` | List runs |

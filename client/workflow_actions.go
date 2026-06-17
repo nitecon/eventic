@@ -285,7 +285,7 @@ func workflowHTTPMethodOptions() []selectOption {
 }
 
 func workflowEventOptions() []selectOption {
-	options := make([]selectOption, 0, len(GitHubWebhookEvents)+1)
+	options := stableEventOptions()
 	for event, actions := range GitHubWebhookEvents {
 		if len(actions) == 0 {
 			options = append(options, selectOption{Value: event, Label: event})
@@ -918,7 +918,7 @@ func dispatchProjectEventAction(ctx context.Context, event protocol.EventMsg, st
 	deliveryID := fmt.Sprintf("workflow-%d", time.Now().UnixNano())
 	message := expandWorkflowValue(target.Message, event, rc)
 	payload := replayPayload(repo, ref, eventName, action, deliveryID)
-	replay(ctx, protocol.EventMsg{
+	replayEvent := protocol.EventMsg{
 		MsgType:     "Event",
 		DeliveryID:  deliveryID,
 		GitHubEvent: eventName,
@@ -929,7 +929,16 @@ func dispatchProjectEventAction(ctx context.Context, event protocol.EventMsg, st
 		Message:     message,
 		CloneURL:    firstNonEmpty(target.CloneURL, "https://github.com/"+repo+".git"),
 		Payload:     payload,
-	})
+	}
+	if isStableInternalEvent(eventType) {
+		replayEvent.Provider = "eventic"
+		replayEvent.StableEvent = eventType
+		replayEvent.ExternalEvent = "workflow"
+		replayEvent.ExternalAction = step.Key
+		replayEvent.GitHubEvent = "internal"
+		replayEvent.Action = ""
+	}
+	replay(ctx, replayEvent)
 	out := fmt.Sprintf(`{"status":"accepted","delivery_id":%q,"repo":%q,"event_type":%q}`, deliveryID, repo, eventType)
 	return workflowActionResult{ExitCode: 0, Output: out, Body: out}, nil
 }

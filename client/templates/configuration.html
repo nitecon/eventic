@@ -72,6 +72,132 @@
         </section>
         [[ end ]]
 
+        [[ if .IsGlobal ]]
+        <section class="nd-panel" id="stable-events">
+          <header class="nd-panel-header">
+            <h2>Stable Events</h2>
+          </header>
+          <article class="nd-card">
+            <div class="nd-card-body">
+              <table class="nd-table-striped nd-table-hover">
+                <thead>
+                  <tr>
+                    <th>Event</th>
+                    <th>Sources</th>
+                    <th>Workflow Uses</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  [[ range .StableEvents ]]
+                  <tr>
+                    <td><span class="nd-badge nd-badge-info">[[ .Event ]]</span></td>
+                    <td>[[ range $index, $source := .ExampleSources ]][[ if $index ]], [[ end ]][[ $source ]][[ end ]]</td>
+                    <td>[[ range $index, $use := .WorkflowUses ]][[ if $index ]], [[ end ]][[ $use ]][[ end ]]</td>
+                  </tr>
+                  [[ end ]]
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="nd-panel" id="event-mapping-create">
+          <header class="nd-panel-header">
+            <h2>New Event Mapping</h2>
+          </header>
+          <datalist id="stable-event-options">
+            [[ range .StableEvents ]]
+            <option value="[[ .Event ]]">[[ .Title ]]</option>
+            [[ end ]]
+          </datalist>
+          <form data-eventic-action="POST /api/event-mappings">
+            <div class="nd-grid nd-grid-2">
+              <div class="nd-form-group">
+                <label for="mapping-name">Name</label>
+                <input id="mapping-name" name="name" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="mapping-provider">Provider</label>
+                <input id="mapping-provider" name="provider" value="github" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="mapping-target">Stable Event</label>
+                <input id="mapping-target" name="target_stable_event" list="stable-event-options" value="artifact.initiate" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="mapping-priority">Priority</label>
+                <input id="mapping-priority" name="priority" type="number" value="50">
+              </div>
+            </div>
+            <div class="nd-form-group">
+              <label for="mapping-conditions">Conditions JSON</label>
+              <textarea id="mapping-conditions" name="conditions_text" rows="6">{
+  "event": "push",
+  "ref": "refs/heads/main"
+}</textarea>
+            </div>
+            <label class="nd-checkbox">
+              <input type="checkbox" name="enabled" checked>
+              <span>Enabled</span>
+            </label>
+            <button type="submit" class="nd-btn-primary">Save Mapping</button>
+          </form>
+        </section>
+
+        <section class="nd-panel" id="event-mappings">
+          <header class="nd-panel-header">
+            <h2>Event Mappings</h2>
+          </header>
+          [[ range .EventMappings ]]
+          [[ $mapping := . ]]
+          <article class="nd-card">
+            <header class="nd-card-header">
+              <h3 class="nd-card-title">[[ .Name ]]</h3>
+              <span class="nd-badge nd-badge-info">[[ .TargetStableEvent ]]</span>
+            </header>
+            <div class="nd-card-body">
+              <form data-eventic-action="PUT /api/event-mappings/[[ .ID ]]">
+                <div class="nd-grid nd-grid-2">
+                  <div class="nd-form-group">
+                    <label for="mapping-name-[[ .ID ]]">Name</label>
+                    <input id="mapping-name-[[ .ID ]]" name="name" value="[[ .Name ]]" required>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="mapping-provider-[[ .ID ]]">Provider</label>
+                    <input id="mapping-provider-[[ .ID ]]" name="provider" value="[[ .Provider ]]" required>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="mapping-id-[[ .ID ]]">Mapping ID</label>
+                    <input id="mapping-id-[[ .ID ]]" name="mapping_id" value="[[ .MappingID ]]">
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="mapping-target-[[ .ID ]]">Stable Event</label>
+                    <input id="mapping-target-[[ .ID ]]" name="target_stable_event" list="stable-event-options" value="[[ .TargetStableEvent ]]" required>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="mapping-priority-[[ .ID ]]">Priority</label>
+                    <input id="mapping-priority-[[ .ID ]]" name="priority" type="number" value="[[ .Priority ]]">
+                  </div>
+                </div>
+                <div class="nd-form-group">
+                  <label for="mapping-conditions-[[ .ID ]]">Conditions JSON</label>
+                  <textarea id="mapping-conditions-[[ .ID ]]" name="conditions_text" rows="6">[[ .ConditionsText ]]</textarea>
+                </div>
+                <label class="nd-checkbox">
+                  <input type="checkbox" name="enabled" [[ if .Enabled ]]checked[[ end ]]>
+                  <span>Enabled</span>
+                </label>
+                <button type="submit" class="nd-btn-primary">Update Mapping</button>
+                <button type="button"
+                        class="nd-btn-danger"
+                        data-eventic-delete="DELETE /api/event-mappings/[[ .ID ]]">Delete Mapping</button>
+              </form>
+            </div>
+          </article>
+          [[ end ]]
+        </section>
+        [[ end ]]
+
         <section class="nd-panel" id="workflow-create">
           <header class="nd-panel-header">
             <h2>New Workflow</h2>

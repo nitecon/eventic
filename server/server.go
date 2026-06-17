@@ -30,6 +30,7 @@ const maxCommsMessageBytes = 1 << 20 // 1 MiB
 func Start(cfg Config) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook/github", webhookHandler(cfg))
+	mux.HandleFunc("/v1/webhooks/", providerWebhookHandler(cfg))
 	mux.HandleFunc("/event/comms", commsHandler(cfg))
 	mux.HandleFunc("/ws", wsHandler(cfg))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -43,46 +44,65 @@ func Start(cfg Config) error {
 
 func webhookHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		acceptProviderWebhook(cfg, "github", w, r)
+	}
+}
+
+func providerWebhookHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		provider := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/webhooks/"), "/")
+		if provider == "" {
+			http.Error(w, "provider required", http.StatusBadRequest)
 			return
 		}
+		acceptProviderWebhook(cfg, strings.ToLower(provider), w, r)
+	}
+}
 
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "failed to read body", http.StatusBadRequest)
-			return
-		}
+func acceptProviderWebhook(cfg Config, provider string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	if provider == "github" {
 		sig := r.Header.Get("X-Hub-Signature-256")
 		if !validateHMAC(body, sig, []byte(cfg.WebhookSecret)) {
 			log.Warn().Msg("invalid webhook signature")
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
 		}
-
-		githubEvent := r.Header.Get("X-GitHub-Event")
-		deliveryID := r.Header.Get("X-GitHub-Delivery")
-
-		event, err := parseWebhook(githubEvent, deliveryID, body)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to parse webhook")
-			http.Error(w, "parse error", http.StatusBadRequest)
-			return
-		}
-
-		log.Info().
-			Str("event", githubEvent).
-			Str("repo", event.Repo).
-			Str("ref", event.Ref).
-			Str("delivery", deliveryID).
-			Msg("webhook received")
-
-		EventChannel <- *event
-
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"accepted"}`))
+	} else if !validateCommsToken(cfg, r.Header.Get("Authorization")) {
+		log.Warn().Str("provider", provider).Msg("invalid provider webhook token")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
 	}
+
+	event, err := parseProviderWebhook(provider, r.Header, body)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to parse webhook")
+		http.Error(w, "parse error", http.StatusBadRequest)
+		return
+	}
+
+	log.Info().
+		Str("provider", event.Provider).
+		Str("event", event.GitHubEvent).
+		Str("repo", event.Repo).
+		Str("ref", event.Ref).
+		Str("delivery", event.DeliveryID).
+		Msg("webhook received")
+
+	EventChannel <- *event
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"accepted"}`))
 }
 
 // commsHandler accepts free-form agent "comms" events over an authenticated
@@ -140,15 +160,17 @@ func commsHandler(cfg Config) http.HandlerFunc {
 		}
 
 		event := protocol.EventMsg{
-			MsgType:     "Event",
-			DeliveryID:  fmt.Sprintf("comms-%d", time.Now().UnixNano()),
-			GitHubEvent: "comms",
-			Repo:        req.Repo,
-			Ref:         req.Ref,
-			Sender:      req.Sender,
-			Message:     req.Message,
-			CloneURL:    cloneURL,
-			Payload:     json.RawMessage(body),
+			MsgType:       "Event",
+			DeliveryID:    fmt.Sprintf("comms-%d", time.Now().UnixNano()),
+			GitHubEvent:   "comms",
+			Provider:      "custom",
+			ExternalEvent: "comms",
+			Repo:          req.Repo,
+			Ref:           req.Ref,
+			Sender:        req.Sender,
+			Message:       req.Message,
+			CloneURL:      cloneURL,
+			Payload:       json.RawMessage(body),
 		}
 
 		log.Info().
@@ -196,7 +218,14 @@ func validateHMAC(payload []byte, signature string, secret []byte) bool {
 	return hmac.Equal(sig, mac.Sum(nil))
 }
 
-func parseWebhook(eventType, deliveryID string, body []byte) (*protocol.EventMsg, error) {
+func parseProviderWebhook(provider string, headers http.Header, body []byte) (*protocol.EventMsg, error) {
+	if provider == "github" {
+		return parseWebhook(headers.Get("X-GitHub-Event"), headers.Get("X-GitHub-Delivery"), body, safeHeaderMap(headers))
+	}
+	return parseGenericWebhook(provider, headers, body)
+}
+
+func parseWebhook(eventType, deliveryID string, body []byte, headers map[string]string) (*protocol.EventMsg, error) {
 	var raw struct {
 		Repository struct {
 			FullName string `json:"full_name"`
@@ -220,15 +249,20 @@ func parseWebhook(eventType, deliveryID string, body []byte) (*protocol.EventMsg
 	}
 
 	event := &protocol.EventMsg{
-		MsgType:     "Event",
-		DeliveryID:  deliveryID,
-		GitHubEvent: eventType,
-		Repo:        raw.Repository.FullName,
-		Ref:         raw.Ref,
-		Action:      raw.Action,
-		Sender:      raw.Sender.Login,
-		CloneURL:    raw.Repository.CloneURL,
-		Payload:     body,
+		MsgType:        "Event",
+		DeliveryID:     deliveryID,
+		GitHubEvent:    eventType,
+		Provider:       "github",
+		ExternalEvent:  eventType,
+		ExternalAction: raw.Action,
+		Repo:           raw.Repository.FullName,
+		Ref:            raw.Ref,
+		Action:         raw.Action,
+		Sender:         raw.Sender.Login,
+		CloneURL:       raw.Repository.CloneURL,
+		Headers:        headers,
+		Metadata:       webhookMetadata(body, raw.Ref),
+		Payload:        body,
 	}
 
 	if raw.PullRequest != nil {
@@ -237,6 +271,257 @@ func parseWebhook(eventType, deliveryID string, body []byte) (*protocol.EventMsg
 	}
 
 	return event, nil
+}
+
+func parseGenericWebhook(provider string, headers http.Header, body []byte) (*protocol.EventMsg, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("unmarshal webhook: %w", err)
+	}
+
+	eventType := providerEventType(provider, headers, payload)
+	action := firstPayloadString(payload,
+		"action",
+		"event.action",
+		"object_attributes.action",
+		"object_attributes.state",
+		"status",
+	)
+	repo := firstPayloadString(payload,
+		"repo",
+		"repository.full_name",
+		"repository.full_name",
+		"project.path_with_namespace",
+		"commonLabels.repo",
+		"alerts[].labels.repo",
+		"labels.repo",
+	)
+	ref := firstPayloadString(payload,
+		"ref",
+		"push.changes[].new.name",
+		"object_attributes.target_branch",
+		"commonLabels.ref",
+		"alerts[].labels.ref",
+	)
+	sender := firstPayloadString(payload,
+		"sender",
+		"sender.login",
+		"user_username",
+		"user.name",
+		"actor",
+		"commonLabels.alertname",
+	)
+	message := firstPayloadString(payload, "message", "title", "body", "commonAnnotations.summary", "commonAnnotations.description")
+	cloneURL := firstPayloadString(payload,
+		"clone_url",
+		"repository.clone_url",
+		"project.git_http_url",
+		"project.http_url",
+	)
+	if cloneURL == "" && repo != "" {
+		cloneURL = "https://github.com/" + repo + ".git"
+	}
+	if repo == "" {
+		return nil, fmt.Errorf("repo is required or must be derivable")
+	}
+
+	deliveryID := firstNonEmpty(
+		headers.Get("X-GitHub-Delivery"),
+		headers.Get("X-Gitlab-Event-UUID"),
+		headers.Get("X-Request-Id"),
+		fmt.Sprintf("%s-%d", provider, time.Now().UnixNano()),
+	)
+
+	event := &protocol.EventMsg{
+		MsgType:        "Event",
+		DeliveryID:     deliveryID,
+		GitHubEvent:    eventType,
+		Provider:       provider,
+		ExternalEvent:  eventType,
+		ExternalAction: action,
+		Repo:           repo,
+		Ref:            ref,
+		Action:         action,
+		Sender:         sender,
+		Message:        message,
+		CloneURL:       cloneURL,
+		Headers:        safeHeaderMap(headers),
+		Metadata:       webhookMetadata(body, ref),
+		Payload:        body,
+	}
+	return event, nil
+}
+
+func providerEventType(provider string, headers http.Header, payload map[string]any) string {
+	switch provider {
+	case "gitlab":
+		return normalizeProviderEvent(headers.Get("X-Gitlab-Event"))
+	case "bitbucket":
+		return normalizeProviderEvent(headers.Get("X-Event-Key"))
+	case "prometheus", "alertmanager":
+		return "alert"
+	default:
+		return normalizeProviderEvent(firstNonEmpty(
+			headers.Get("X-GitHub-Event"),
+			headers.Get("X-Gitlab-Event"),
+			headers.Get("X-Event-Key"),
+			firstPayloadString(payload, "event", "event_type", "type"),
+			provider,
+		))
+	}
+}
+
+func normalizeProviderEvent(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimSuffix(value, " hook")
+	value = strings.ReplaceAll(value, " ", "_")
+	value = strings.ReplaceAll(value, ":", ".")
+	return value
+}
+
+func safeHeaderMap(headers http.Header) map[string]string {
+	out := map[string]string{}
+	for name, values := range headers {
+		switch strings.ToLower(name) {
+		case "authorization", "cookie", "x-hub-signature", "x-hub-signature-256":
+			continue
+		}
+		if len(values) > 0 {
+			out[name] = values[0]
+		}
+	}
+	return out
+}
+
+func webhookMetadata(body []byte, ref string) map[string]string {
+	metadata := map[string]string{}
+	if ref != "" {
+		metadata["ref"] = ref
+		if strings.HasPrefix(ref, "refs/tags/") {
+			metadata["target_environment"] = "production"
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return metadata
+	}
+	if sha := firstPayloadString(payload, "after", "head_commit.id", "workflow_run.head_sha"); sha != "" {
+		metadata["commit_sha"] = sha
+	}
+	if severity := firstPayloadString(payload,
+		"alert.security_advisory.severity",
+		"security_advisory.severity",
+		"commonLabels.severity",
+		"alerts[].labels.severity",
+		"vulnerabilities[].severity",
+		"severity",
+	); severity != "" {
+		metadata["severity"] = strings.ToUpper(severity)
+	}
+	return metadata
+}
+
+func firstPayloadString(payload map[string]any, paths ...string) string {
+	for _, path := range paths {
+		for _, value := range payloadPathValues([]any{payload}, path) {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func payloadPathValues(nodes []any, path string) []string {
+	for _, part := range strings.Split(path, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil
+		}
+		nodes = selectPayloadPart(nodes, part)
+		if len(nodes) == 0 {
+			return nil
+		}
+	}
+	values := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if value := payloadValueString(node); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func selectPayloadPart(nodes []any, part string) []any {
+	iterateArray := strings.HasSuffix(part, "[]")
+	if iterateArray {
+		part = strings.TrimSuffix(part, "[]")
+	}
+	var selected []any
+	for _, node := range nodes {
+		object, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, ok := lookupPayloadObject(object, part)
+		if !ok {
+			continue
+		}
+		if iterateArray {
+			items, ok := value.([]any)
+			if !ok {
+				continue
+			}
+			selected = append(selected, items...)
+			continue
+		}
+		selected = append(selected, value)
+	}
+	return selected
+}
+
+func lookupPayloadObject(object map[string]any, key string) (any, bool) {
+	if value, ok := object[key]; ok {
+		return value, true
+	}
+	for actual, value := range object {
+		if strings.EqualFold(actual, key) {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func payloadValueString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case bool:
+		if typed {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return fmt.Sprintf("%v", typed)
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(data)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func wsHandler(cfg Config) http.HandlerFunc {

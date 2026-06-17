@@ -790,15 +790,18 @@ type eventType struct {
 	Actions []string `json:"actions"`
 }
 
-// eventTypesHandler returns the GitHub webhook event reference plus the synthetic
-// "comms" event, sorted by event name, for the workflow editor's dropdowns.
+// eventTypesHandler returns the stable internal event catalog plus the GitHub
+// webhook reference and synthetic "comms" event for workflow editor dropdowns.
 func eventTypesHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		types := make([]eventType, 0, len(GitHubWebhookEvents)+1)
+		types := make([]eventType, 0, len(GitHubWebhookEvents)+len(StableEventDefinitions())+1)
+		for _, stable := range StableEventDefinitions() {
+			types = append(types, eventType{Event: stable.Event, Actions: []string{}})
+		}
 		for event, actions := range GitHubWebhookEvents {
 			sorted := append([]string(nil), actions...)
 			sort.Strings(sorted)
@@ -809,6 +812,164 @@ func eventTypesHandler() http.HandlerFunc {
 		sort.Slice(types, func(i, j int) bool { return types[i].Event < types[j].Event })
 		writeJSON(w, http.StatusOK, types)
 	}
+}
+
+func stableEventsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, StableEventDefinitions())
+	}
+}
+
+type eventMappingRequest struct {
+	MappingID         string            `json:"mapping_id"`
+	Provider          string            `json:"provider"`
+	Name              string            `json:"name"`
+	Enabled           boolish           `json:"enabled"`
+	Priority          intish            `json:"priority"`
+	Conditions        map[string]string `json:"conditions"`
+	ConditionsText    string            `json:"conditions_text"`
+	TargetStableEvent string            `json:"target_stable_event"`
+}
+
+func eventMappingsCollectionHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			mappings, err := store.ListEventMappings(r.Context())
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to list event mappings")
+				return
+			}
+			writeJSON(w, http.StatusOK, mappings)
+		case http.MethodPost:
+			mapping, fieldErrs := eventMappingFromRequest(r)
+			if fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			id, err := store.CreateEventMapping(r.Context(), mapping)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to create event mapping")
+				return
+			}
+			mapping.ID = id
+			writeJSON(w, http.StatusCreated, mapping)
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func eventMappingItemHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+		id, ok := parsePathID(w, r, "/api/event-mappings/")
+		if !ok {
+			return
+		}
+		switch r.Method {
+		case http.MethodPut:
+			mapping, fieldErrs := eventMappingFromRequest(r)
+			if fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			mapping.ID = id
+			err := store.UpdateEventMapping(r.Context(), mapping)
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "event mapping not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to update event mapping")
+				return
+			}
+			writeJSON(w, http.StatusOK, mapping)
+		case http.MethodDelete:
+			if err := store.DeleteEventMapping(r.Context(), id); err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to delete event mapping")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func eventMappingFromRequest(r *http.Request) (*EventMapping, map[string]string) {
+	var req eventMappingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, map[string]string{"error": "invalid json"}
+	}
+	conditions := req.Conditions
+	if strings.TrimSpace(req.ConditionsText) != "" {
+		conditions = map[string]string{}
+		if err := json.Unmarshal([]byte(req.ConditionsText), &conditions); err != nil {
+			return nil, map[string]string{"conditions_text": "must be a JSON object of string conditions"}
+		}
+	}
+	mapping := &EventMapping{
+		MappingID:         strings.TrimSpace(req.MappingID),
+		Provider:          strings.ToLower(strings.TrimSpace(req.Provider)),
+		Name:              strings.TrimSpace(req.Name),
+		Enabled:           req.Enabled.Bool(),
+		Priority:          req.Priority.Int64(),
+		Conditions:        conditions,
+		TargetStableEvent: strings.TrimSpace(req.TargetStableEvent),
+	}
+	if mapping.MappingID == "" {
+		mapping.MappingID = nextEventMappingID(mapping.Provider, mapping.TargetStableEvent)
+	}
+	if mapping.Priority == 0 {
+		mapping.Priority = 50
+	}
+	return mapping, validateEventMapping(mapping)
+}
+
+func validateEventMapping(mapping *EventMapping) map[string]string {
+	errs := map[string]string{}
+	if mapping.Name == "" {
+		errs["name"] = "required"
+	}
+	if mapping.Provider == "" {
+		errs["provider"] = "required"
+	}
+	if mapping.TargetStableEvent == "" {
+		errs["target_stable_event"] = "required"
+	}
+	if len(mapping.Conditions) == 0 {
+		errs["conditions_text"] = "at least one condition is required"
+	}
+	for key := range mapping.Conditions {
+		if strings.TrimSpace(key) == "" {
+			errs["conditions_text"] = "condition keys must not be empty"
+			break
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
+}
+
+func nextEventMappingID(provider, target string) string {
+	base := strings.Trim(provider+"_"+strings.ReplaceAll(target, ".", "_"), "_")
+	if base == "" {
+		base = "event_mapping"
+	}
+	return "map_" + base + "_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────

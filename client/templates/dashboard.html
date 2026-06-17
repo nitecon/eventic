@@ -156,7 +156,9 @@
                 <thead>
                   <tr>
                     <th>Repo</th>
-                    <th>Event / Action</th>
+                    <th>Stable Event</th>
+                    <th>Provider</th>
+                    <th>External Event</th>
                     <th>State</th>
                     <th>Delivery ID</th>
                     <th>Updated</th>
@@ -183,7 +185,9 @@
         <template id="event-row-tmpl">
           <tr>
             <td>{{repo}}</td>
-            <td>{{event}} / {{action}}</td>
+            <td>{{event}}</td>
+            <td>{{provider}}</td>
+            <td>{{external_event}} / {{external_action}}</td>
             <td><span class="nd-badge nd-badge-info">{{state}}</span></td>
             <td>{{delivery_id}}</td>
             <td>{{updated_at}}</td>

@@ -1,9 +1,10 @@
 # Workflows
 
-Eventic is a per-repo workflow engine. When an event arrives (a GitHub webhook
-or a `comms` message), the client resolves **one** workflow for the event,
-checks out the branch, and executes the workflow's **DAG** of typed action nodes,
-passing output and context between them.
+Eventic is a per-repo workflow engine. When an event arrives (a GitHub webhook,
+provider webhook, or `comms` message), the client normalizes provider-specific
+payloads into a stable internal event when a mapping matches, resolves **one**
+workflow for the event, checks out the branch, and executes the workflow's
+**DAG** of typed action nodes, passing output and context between them.
 
 Workflows live in the client's SQLite database and are authored through the
 dashboard / [Workflow API](../README.md#workflow-api). There is **no** in-repo
@@ -86,7 +87,11 @@ Every node command receives the process environment plus:
 | `EVENTIC_REPOS` | Root directory of managed repositories |
 | `EVENTIC_REPO` | `org/repo` |
 | `EVENTIC_REF` | Checked-out git ref |
-| `EVENTIC_EVENT` | Event type (`push`, `pull_request`, `comms`, …) |
+| `EVENTIC_EVENT` | Stable event when mapped, otherwise the external event type |
+| `EVENTIC_STABLE_EVENT` | Stable internal event key, when a mapping matched |
+| `EVENTIC_PROVIDER` | Inbound provider (`github`, `gitlab`, `prometheus`, `custom`, etc.) |
+| `EVENTIC_EXTERNAL_EVENT` | Provider event name before normalization |
+| `EVENTIC_EXTERNAL_ACTION` | Provider action before normalization |
 | `EVENTIC_ACTION` | Event action (e.g. `opened`) |
 | `EVENTIC_SENDER` | Who triggered the event |
 | `EVENTIC_MESSAGE` | Free-form payload from a `comms` event (empty otherwise) |
@@ -105,7 +110,9 @@ reports) between nodes — write a file in one node, read it in the next. Use
 ## Resolution
 
 The client picks exactly one workflow, **repo overriding global**, most
-specific first:
+specific first. If an inbound mapping produced a stable event such as
+`artifact.initiate`, resolution uses that stable event with no action suffix.
+If no mapping matched, legacy external event/action resolution is preserved:
 
 1. `repo` scope + `event.action` (e.g. `pull_request.opened`)
 2. `repo` scope + `event` (e.g. `pull_request`)
@@ -115,6 +122,14 @@ specific first:
 The first enabled match wins. If nothing matches, the event is recorded as
 `skipped`. A repo defining its own workflow for an event opts **out** of the
 global workflow for that event (no composition in v1).
+
+Default stable mappings include GitHub `push` on `refs/heads/main` to
+`artifact.initiate`, GitHub `release.published` to `artifact.published`,
+failed GitHub `workflow_run` and Prometheus firing alerts to `system.failure`,
+GitHub `dependabot_alert.created` and critical scan findings to
+`security.alarm`, and `comms` to `communication.received`. Edit mappings from
+`/global` or the `/api/event-mappings` API. Use provider `*` for mappings that
+should apply to any inbound provider.
 
 ## Parallelism
 
