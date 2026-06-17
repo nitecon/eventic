@@ -145,6 +145,272 @@ func workflowItemHandler(store *ProjectStore) http.HandlerFunc {
 	}
 }
 
+// workflowConfig is a dashboard-friendly projection of Workflow that flattens
+// command nodes into an editable newline-delimited step list.
+type workflowConfig struct {
+	ID         int64     `json:"id"`
+	Scope      string    `json:"scope"`
+	Repo       string    `json:"repo"`
+	EventType  string    `json:"event_type"`
+	Name       string    `json:"name"`
+	Enabled    bool      `json:"enabled"`
+	Steps      string    `json:"steps"`
+	StepsCount int       `json:"steps_count"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type workflowConfigRequest struct {
+	Scope     string `json:"scope"`
+	Repo      string `json:"repo"`
+	EventType string `json:"event_type"`
+	Name      string `json:"name"`
+	Steps     string `json:"steps"`
+}
+
+func workflowConfigCollectionHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+			repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+			configs, err := listWorkflowConfigs(r.Context(), store, scope, repo)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to list workflow configuration")
+				return
+			}
+			writeJSON(w, http.StatusOK, configs)
+		case http.MethodPost:
+			req, ok := decodeWorkflowConfig(w, r)
+			if !ok {
+				return
+			}
+			scope := firstNonEmpty(r.URL.Query().Get("scope"), req.Scope)
+			repo := firstNonEmpty(r.URL.Query().Get("repo"), req.Repo)
+			wf, fieldErrs := workflowFromConfig(req, scope, repo, nil)
+			if fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			id, err := store.CreateWorkflow(r.Context(), &wf)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to create workflow")
+				return
+			}
+			created, err := store.GetWorkflow(r.Context(), id)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read created workflow")
+				return
+			}
+			writeJSON(w, http.StatusCreated, workflowConfigFrom(*created))
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func workflowConfigItemHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+
+		id, ok := parsePathID(w, r, "/api/workflow-config/")
+		if !ok {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			existing, err := store.GetWorkflow(r.Context(), id)
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "workflow not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read workflow")
+				return
+			}
+			req, ok := decodeWorkflowConfig(w, r)
+			if !ok {
+				return
+			}
+			wf, fieldErrs := workflowFromConfig(req, existing.Scope, existing.Repo, existing)
+			if fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			wf.ID = id
+			if err := store.UpdateWorkflow(r.Context(), &wf); err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to update workflow")
+				return
+			}
+			updated, err := store.GetWorkflow(r.Context(), id)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read updated workflow")
+				return
+			}
+			writeJSON(w, http.StatusOK, workflowConfigFrom(*updated))
+		case http.MethodDelete:
+			if err := store.DeleteWorkflow(r.Context(), id); err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to delete workflow")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func listWorkflowConfigs(ctx context.Context, store *ProjectStore, scope, repo string) ([]workflowConfig, error) {
+	workflows, err := store.ListWorkflows(ctx, strings.TrimSpace(scope), strings.TrimSpace(repo), "")
+	if err != nil {
+		return nil, err
+	}
+	configs := make([]workflowConfig, 0, len(workflows))
+	for _, wf := range workflows {
+		full, err := store.GetWorkflow(ctx, wf.ID)
+		if err != nil || full == nil {
+			configs = append(configs, workflowConfigFrom(wf))
+			continue
+		}
+		configs = append(configs, workflowConfigFrom(*full))
+	}
+	return configs, nil
+}
+
+func decodeWorkflowConfig(w http.ResponseWriter, r *http.Request) (workflowConfigRequest, bool) {
+	var req workflowConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		globalError(w, http.StatusBadRequest, "invalid workflow configuration payload")
+		return workflowConfigRequest{}, false
+	}
+	return req, true
+}
+
+func workflowFromConfig(req workflowConfigRequest, scope, repo string, existing *Workflow) (Workflow, map[string]string) {
+	name := strings.TrimSpace(req.Name)
+	eventType := strings.TrimSpace(req.EventType)
+	if existing != nil {
+		if name == "" {
+			name = existing.Name
+		}
+		if eventType == "" {
+			eventType = existing.EventType
+		}
+	}
+
+	enabled := true
+	if existing != nil {
+		enabled = existing.Enabled
+	}
+
+	nodes, edges, stepsErr := parseWorkflowConfigSteps(req.Steps)
+	wf := Workflow{
+		Scope:     strings.TrimSpace(scope),
+		Repo:      strings.TrimSpace(repo),
+		EventType: eventType,
+		Name:      name,
+		Enabled:   enabled,
+		Nodes:     nodes,
+		Edges:     edges,
+	}
+	fieldErrs := validateWorkflow(&wf)
+	if fieldErrs == nil {
+		fieldErrs = map[string]string{}
+	}
+	if stepsErr != "" {
+		fieldErrs["steps"] = stepsErr
+	}
+	if len(fieldErrs) > 0 {
+		return Workflow{}, fieldErrs
+	}
+	return wf, nil
+}
+
+func parseWorkflowConfigSteps(steps string) ([]WorkflowNode, []WorkflowEdge, string) {
+	lines := strings.Split(steps, "\n")
+	nodes := make([]WorkflowNode, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name := ""
+		command := line
+		if before, after, ok := strings.Cut(line, "|"); ok {
+			name = strings.TrimSpace(before)
+			command = strings.TrimSpace(after)
+		}
+		if command == "" {
+			return nil, nil, "each step requires a command"
+		}
+		index := len(nodes) + 1
+		nodes = append(nodes, WorkflowNode{
+			NodeKey: fmt.Sprintf("step-%d", index),
+			Name:    name,
+			Type:    "command",
+			Command: command,
+			PosX:    float64((index - 1) * 220),
+			PosY:    0,
+		})
+	}
+	if len(nodes) == 0 {
+		return nil, nil, "at least one step is required"
+	}
+
+	edges := make([]WorkflowEdge, 0, len(nodes)-1)
+	for i := 1; i < len(nodes); i++ {
+		edges = append(edges, WorkflowEdge{
+			FromNode:  nodes[i-1].NodeKey,
+			ToNode:    nodes[i].NodeKey,
+			Condition: "success",
+		})
+	}
+	return nodes, edges, ""
+}
+
+func workflowConfigFrom(wf Workflow) workflowConfig {
+	steps := make([]string, 0, len(wf.Nodes))
+	for _, node := range wf.Nodes {
+		command := strings.TrimSpace(node.Command)
+		if command == "" {
+			continue
+		}
+		if name := strings.TrimSpace(node.Name); name != "" {
+			steps = append(steps, name+" | "+command)
+			continue
+		}
+		steps = append(steps, command)
+	}
+	return workflowConfig{
+		ID:         wf.ID,
+		Scope:      wf.Scope,
+		Repo:       wf.Repo,
+		EventType:  wf.EventType,
+		Name:       wf.Name,
+		Enabled:    wf.Enabled,
+		Steps:      strings.Join(steps, "\n"),
+		StepsCount: len(steps),
+		UpdatedAt:  wf.UpdatedAt,
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 // decodeWorkflow decodes a Workflow from the request body, writing a 400
 // envelope and reporting false on malformed JSON.
 func decodeWorkflow(w http.ResponseWriter, r *http.Request) (Workflow, bool) {
@@ -265,7 +531,9 @@ func eventTypesHandler() http.HandlerFunc {
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 // apiProjectsHandler serves project summaries under /api/projects, preserving
-// the legacy shapes: a string array for the list and a ProjectState for a repo.
+// the legacy shapes: a string array for the plain list and a ProjectState for a
+// repo. Supplying summary=1, org, or search returns ProjectSummary objects for
+// navigation and overview filtering.
 func apiProjectsHandler(store *ProjectStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -290,6 +558,22 @@ func apiProjectsHandler(store *ProjectStore) http.HandlerFunc {
 				return
 			}
 			writeJSON(w, http.StatusOK, project)
+			return
+		}
+
+		query := r.URL.Query()
+		org := strings.TrimSpace(query.Get("org"))
+		search := strings.TrimSpace(query.Get("search"))
+		if query.Get("summary") == "1" || org != "" || search != "" {
+			projects, err := store.ListProjectSummaries(r.Context(), org, search)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read projects")
+				return
+			}
+			if projects == nil {
+				projects = []ProjectSummary{}
+			}
+			writeJSON(w, http.StatusOK, projects)
 			return
 		}
 

@@ -43,6 +43,16 @@ type ProjectState struct {
 	RecentEvents   []ProjectEvent `json:"recent_events,omitempty"`
 }
 
+// ProjectSummary is the compact repository shape used by navigation and
+// overview lists.
+type ProjectSummary struct {
+	Repo      string    `json:"repo"`
+	Owner     string    `json:"owner"`
+	Name      string    `json:"name"`
+	State     string    `json:"state"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // ProjectEvent is a bounded persisted execution history item for one repo.
 type ProjectEvent struct {
 	Repo           string     `json:"repo"`
@@ -287,7 +297,8 @@ func (s *ProjectStore) ListProjects(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT repo
 		FROM projects
-		ORDER BY updated_at DESC
+		ORDER BY updated_at DESC,
+			lower(CASE WHEN instr(repo, '/') > 0 THEN substr(repo, instr(repo, '/') + 1) ELSE repo END) DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -301,6 +312,49 @@ func (s *ProjectStore) ListProjects(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		projects = append(projects, repo)
+	}
+	return projects, rows.Err()
+}
+
+func (s *ProjectStore) ListProjectSummaries(ctx context.Context, org, search string) ([]ProjectSummary, error) {
+	if s == nil {
+		return []ProjectSummary{}, nil
+	}
+
+	org = strings.TrimSpace(org)
+	search = strings.ToLower(strings.TrimSpace(search))
+
+	query := `
+		SELECT repo, state, updated_at
+		FROM projects
+		WHERE 1 = 1`
+	args := []any{}
+	if org != "" {
+		query += " AND repo LIKE ?"
+		args = append(args, org+"/%")
+	}
+	if search != "" {
+		query += " AND lower(repo) LIKE ?"
+		args = append(args, "%"+search+"%")
+	}
+	query += `
+		ORDER BY updated_at DESC,
+			lower(CASE WHEN instr(repo, '/') > 0 THEN substr(repo, instr(repo, '/') + 1) ELSE repo END) DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []ProjectSummary
+	for rows.Next() {
+		var summary ProjectSummary
+		if err := rows.Scan(&summary.Repo, &summary.State, &summary.UpdatedAt); err != nil {
+			return nil, err
+		}
+		summary.Owner, summary.Name = splitRepoName(summary.Repo)
+		projects = append(projects, summary)
 	}
 	return projects, rows.Err()
 }
@@ -578,6 +632,14 @@ func latestEventOutput(event ExecutionEvent) string {
 		}
 	}
 	return ""
+}
+
+func splitRepoName(repo string) (string, string) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return "", repo
+	}
+	return owner, name
 }
 
 func isNotFound(err error) bool {

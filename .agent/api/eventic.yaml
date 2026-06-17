@@ -1,0 +1,65 @@
+app: eventic
+title: Eventic API agent context
+summary: Agent-facing context for Eventic's ndesign dashboard, repository configuration routes, workflow APIs, and run/event streams.
+kind: agent_context
+source_format: agent_context
+source_ref: .agent/api/eventic.yaml
+version: "2026-06-17"
+labels:
+  - eventic
+  - go
+  - dashboard
+  - workflow-engine
+  - ndesign
+content:
+  purpose: >
+    Eventic is a per-repository DAG workflow engine for GitHub events. The
+    client persists known repositories, workflow definitions, workflow runs, and
+    recent event state in SQLite, then exposes an ndesign web console for
+    repository discovery, global workflow configuration, repository workflow
+    configuration, manual replay, and live run/event monitoring.
+  source_documents:
+    - README.md
+    - docs/Workflows.md
+    - client/state.go
+    - client/workflow_store.go
+    - client/web.go
+    - client/web_api.go
+    - client/web_templates.go
+    - client/templates/dashboard.html
+    - client/templates/configuration.html
+  workflows:
+    - name: Navigate repositories
+      steps:
+        - Open `GET /` for the repository dashboard.
+        - The left navigation has an organization selector and search input. It defaults to `nitecon` when present.
+        - The repository list is populated from `GET /api/projects?org=ORG&search=QUERY&summary=1`.
+        - Summary rows are sorted by `updated_at DESC`, then repository name descending for ties.
+        - Left-clicking a repository navigates to `GET /{org}/{repo}`; it does not mutate a dashboard-local selected-repo variable.
+        - Use `GET /global` for global workflow configuration.
+    - name: Configure repository workflows
+      steps:
+        - Open `GET /{org}/{repo}` for a server-rendered configuration page. Unknown repositories return 404.
+        - Existing workflows are loaded from `GET /api/workflow-config?scope=repo&repo={org}/{repo}`.
+        - Create a workflow with `POST /api/workflow-config?scope=repo&repo={org}/{repo}`.
+        - Update a workflow with `PUT /api/workflow-config/{id}`.
+        - Delete a workflow with `DELETE /api/workflow-config/{id}`.
+        - The configuration form flattens command nodes into a newline-delimited `steps` field. Each line is either a shell command or `Display name | shell command`; Eventic converts those lines into sequential DAG nodes linked by success edges.
+        - "`event_type` accepts the same event/action keys used by the underlying workflow store, such as `push` or `pull_request.opened`."
+    - name: Configure global workflows
+      steps:
+        - Open `GET /global` for all-repository workflow defaults.
+        - Existing workflows are loaded from `GET /api/workflow-config?scope=global`.
+        - Create global workflows with `POST /api/workflow-config?scope=global`.
+        - Global workflow forms use the same `name`, `event_type`, and newline-delimited `steps` contract as repository workflows.
+        - Runtime workflow resolution still prefers repo/action, then repo/event, then global/action, then global/event.
+    - name: Use project and workflow APIs
+      steps:
+        - "`GET /api/projects` preserves the legacy string-array response for known repositories."
+        - "`GET /api/projects?summary=1`, or any `org`/`search` query, returns `ProjectSummary` objects: `repo`, `owner`, `name`, `state`, `updated_at`."
+        - "`GET /api/projects/{org}/{repo}` returns the latest `ProjectState` for that repository."
+        - "`GET /api/workflows`, `POST /api/workflows`, `GET/PUT/DELETE /api/workflows/{id}` remain the raw DAG CRUD API and accept explicit nodes and edges."
+        - "`GET /api/event-types` returns GitHub webhook event/action references plus Eventic's synthetic `comms` event."
+        - "`GET /api/runs?repo=ORG/REPO&limit=N` lists runs for one repo; omitting `repo` lists recent runs across repositories."
+        - "`POST /api/runs` triggers a manual replay event with `repo`, `event_type`, `ref`, and optional `message`."
+        - "`GET /ws/runs` streams WebSocket run updates for ndesign rows; `/api/runs/stream` and `/events/stream` are SSE fallbacks."

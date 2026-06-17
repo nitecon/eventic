@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eventic — [[ .Title ]]</title>
+  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.css">
+  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css" class="theme" data-theme="light">
+  <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
+  <meta name="nd-theme" content="dark" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/dark.min.css">
+  <meta name="endpoint:workflow-config" content="/api/workflow-config">
+  <meta name="var:repo" content="[[ .Repo ]]">
+  <meta name="var:scope" content="[[ .Scope ]]">
+</head>
+<body class="app-page">
+  <div class="app-layout nd-h-screen nd-overflow-hidden">
+    <nav class="sidebar" id="app-sidebar">
+      <div class="nd-nav-brand">
+        <a href="/">Eventic</a>
+      </div>
+      <span class="nd-nav-section">Configuration</span>
+      <ul class="nd-nav-menu">
+        <li><a href="/global" [[ if .IsGlobal ]]class="nd-active"[[ end ]]>Global Workflows</a></li>
+        [[ if .Repo ]]
+        <li><a href="/[[ .Owner ]]/[[ .Name ]]" class="nd-active">[[ .Name ]]</a></li>
+        [[ end ]]
+      </ul>
+      <span class="nd-nav-section">Navigation</span>
+      <ul class="nd-nav-menu">
+        <li><a href="/">Repositories</a></li>
+      </ul>
+    </nav>
+
+    <div class="app-body">
+      <header>
+        <div class="app-header-left">
+          <button class="hamburger" data-nd-toggle="sidebar" aria-label="Toggle navigation">&#9776;</button>
+          <h1 class="app-header-title">[[ .Title ]]</h1>
+        </div>
+        <div class="app-header-right">
+          <a href="/">Repositories</a>
+          <a href="/global" [[ if .IsGlobal ]]class="nd-active"[[ end ]]>Global Workflows</a>
+          <button class="nd-btn-ghost nd-btn-sm" data-nd-theme-toggle>Toggle Theme</button>
+        </div>
+      </header>
+
+      <main class="app-content">
+        [[ if .Project ]]
+        <section class="nd-panel" id="project-state">
+          <header class="nd-panel-header">
+            <h2>Repository</h2>
+          </header>
+          <article class="nd-card">
+            <header class="nd-card-header">
+              <h3 class="nd-card-title">[[ .Project.Repo ]]</h3>
+              <span class="nd-badge nd-badge-info">[[ .Project.State ]]</span>
+            </header>
+            <div class="nd-card-body">
+              <div class="nd-well nd-well-sm">
+                <p class="nd-well-title">Ref</p>
+                <pre><code>[[ .Project.Ref ]]</code></pre>
+              </div>
+              <div class="nd-well nd-well-sm">
+                <p class="nd-well-title">Hash</p>
+                <pre><code>[[ .Project.Hash ]]</code></pre>
+              </div>
+            </div>
+            <footer class="nd-card-footer">
+              Updated: [[ .Project.UpdatedAt ]]
+            </footer>
+          </article>
+        </section>
+        [[ end ]]
+
+        <section class="nd-panel" id="workflow-create">
+          <header class="nd-panel-header">
+            <h2>New Workflow</h2>
+          </header>
+          <article class="nd-card">
+            <div class="nd-card-body">
+              <form data-nd-action="POST /api/workflow-config?scope=[[ .Scope ]][[ if .Repo ]]&amp;repo=[[ .Repo ]][[ end ]]"
+                    data-nd-success="reset, refresh:#workflow-list, toast:Workflow saved">
+                <div class="nd-form-group">
+                  <label for="workflow-name">Name</label>
+                  <input id="workflow-name" name="name" required>
+                  <div class="nd-form-error"></div>
+                </div>
+                <div class="nd-form-group">
+                  <label for="workflow-event">Event</label>
+                  <input id="workflow-event" name="event_type" required>
+                  <div class="nd-form-error"></div>
+                </div>
+                <div class="nd-form-group">
+                  <label for="workflow-steps">Steps</label>
+                  <textarea id="workflow-steps" name="steps" rows="8" required></textarea>
+                  <div class="nd-form-error"></div>
+                </div>
+                <button type="submit" class="nd-btn-primary">Save Workflow</button>
+              </form>
+            </div>
+          </article>
+        </section>
+
+        <section class="nd-panel" id="workflow-configuration">
+          <header class="nd-panel-header">
+            <h2>Configured Workflows</h2>
+          </header>
+          <div id="workflow-list"
+               data-nd-bind="/api/workflow-config?scope=[[ .Scope ]][[ if .Repo ]]&amp;repo=[[ .Repo ]][[ end ]]"
+               data-nd-template="workflow-config-row-tmpl">
+            [[ range .Workflows ]]
+            <article class="nd-card">
+              <header class="nd-card-header">
+                <h3 class="nd-card-title">[[ .Name ]]</h3>
+                <span class="nd-badge nd-badge-info">[[ .EventType ]]</span>
+              </header>
+              <div class="nd-card-body">
+                <form data-nd-action="PUT /api/workflow-config/[[ .ID ]]"
+                      data-nd-success="refresh:#workflow-list, toast:Workflow updated">
+                  <div class="nd-form-group">
+                    <label for="workflow-name-[[ .ID ]]">Name</label>
+                    <input id="workflow-name-[[ .ID ]]" name="name" value="[[ .Name ]]" required>
+                    <div class="nd-form-error"></div>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="workflow-event-[[ .ID ]]">Event</label>
+                    <input id="workflow-event-[[ .ID ]]" name="event_type" value="[[ .EventType ]]" required>
+                    <div class="nd-form-error"></div>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="workflow-steps-[[ .ID ]]">Steps</label>
+                    <textarea id="workflow-steps-[[ .ID ]]" name="steps" rows="8" required>[[ .Steps ]]</textarea>
+                    <div class="nd-form-error"></div>
+                  </div>
+                  <button type="submit" class="nd-btn-primary">Update</button>
+                  <button type="button"
+                          class="nd-btn-danger"
+                          data-nd-action="DELETE /api/workflow-config/[[ .ID ]]"
+                          data-nd-confirm="Delete this workflow?"
+                          data-nd-success="refresh:#workflow-list, toast:Workflow deleted">Delete</button>
+                </form>
+              </div>
+              <footer class="nd-card-footer">
+                [[ .StepsCount ]] steps
+              </footer>
+            </article>
+            [[ end ]]
+          </div>
+        </section>
+
+        <template id="workflow-config-row-tmpl">
+          <article class="nd-card">
+            <header class="nd-card-header">
+              <h3 class="nd-card-title">{{name}}</h3>
+              <span class="nd-badge nd-badge-info">{{event_type}}</span>
+            </header>
+            <div class="nd-card-body">
+              <form data-nd-action="PUT /api/workflow-config/{{id}}"
+                    data-nd-success="refresh:#workflow-list, toast:Workflow updated">
+                <div class="nd-form-group">
+                  <label for="workflow-name-{{id}}">Name</label>
+                  <input id="workflow-name-{{id}}" name="name" value="{{name}}" required>
+                  <div class="nd-form-error"></div>
+                </div>
+                <div class="nd-form-group">
+                  <label for="workflow-event-{{id}}">Event</label>
+                  <input id="workflow-event-{{id}}" name="event_type" value="{{event_type}}" required>
+                  <div class="nd-form-error"></div>
+                </div>
+                <div class="nd-form-group">
+                  <label for="workflow-steps-{{id}}">Steps</label>
+                  <textarea id="workflow-steps-{{id}}" name="steps" rows="8" required>{{steps}}</textarea>
+                  <div class="nd-form-error"></div>
+                </div>
+                <button type="submit" class="nd-btn-primary">Update</button>
+                <button type="button"
+                        class="nd-btn-danger"
+                        data-nd-action="DELETE /api/workflow-config/{{id}}"
+                        data-nd-confirm="Delete this workflow?"
+                        data-nd-success="refresh:#workflow-list, toast:Workflow deleted">Delete</button>
+              </form>
+            </div>
+            <footer class="nd-card-footer">
+              {{steps_count}} steps
+            </footer>
+          </article>
+        </template>
+      </main>
+    </div>
+  </div>
+
+  <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.js"></script>
+</body>
+</html>

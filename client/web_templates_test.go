@@ -111,33 +111,38 @@ func TestDashboardTemplateNavSections(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// nd-nav-section for Global group and each project.
-	for _, section := range []string{"Global", "nitecon/alpha", "nitecon/beta"} {
+	for _, section := range []string{"Organization", "Workflows", "Repositories"} {
 		if !strings.Contains(body, section) {
 			t.Errorf("expected nav section %q in rendered output", section)
 		}
 	}
 
-	// nd-nav-section class itself must appear.
 	if !strings.Contains(body, `class="nd-nav-section"`) {
 		t.Error("expected nd-nav-section class in rendered output")
+	}
+	if strings.Contains(body, `<span class="nd-nav-section">nitecon/alpha</span>`) {
+		t.Error("repository names must not be duplicated as sidebar section headings")
+	}
+	for _, href := range []string{`href="/global"`, `href="/nitecon/alpha"`, `href="/nitecon/beta"`} {
+		if !strings.Contains(body, href) {
+			t.Errorf("expected routed nav link %q in rendered output", href)
+		}
 	}
 }
 
 func TestDashboardTemplateStepNames(t *testing.T) {
 	store := seedTemplateStore(t)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/nitecon/alpha", nil)
 	req.Host = "localhost:16384"
 	rec := httptest.NewRecorder()
 
-	indexHandler(Config{}, store).ServeHTTP(rec, req)
+	configurationHandler(store).ServeHTTP(rec, req)
 
 	body := rec.Body.String()
 
-	// Step names from all workflows must appear.
-	for _, stepName := range []string{"Lint", "Test", "Deploy", "Check"} {
+	for _, stepName := range []string{"alpha-deploy", "Deploy | make deploy"} {
 		if !strings.Contains(body, stepName) {
-			t.Errorf("expected step name %q in rendered nav", stepName)
+			t.Errorf("expected workflow configuration text %q in rendered output", stepName)
 		}
 	}
 }
@@ -153,7 +158,7 @@ func TestDashboardTemplateMainPanelIDs(t *testing.T) {
 	body := rec.Body.String()
 
 	// Main content panels must carry the expected ids.
-	for _, id := range []string{`id="project-detail"`, `id="project-runs"`, `id="event-stream"`} {
+	for _, id := range []string{`id="project-runs"`, `id="event-stream"`, `id="projects-overview"`} {
 		if !strings.Contains(body, id) {
 			t.Errorf("expected panel id %q in rendered output", id)
 		}
@@ -172,8 +177,8 @@ func TestDashboardTemplateDataNdAttributes(t *testing.T) {
 
 	// Key data-nd-* attributes must be present.
 	for _, attr := range []string{
-		`data-nd-bind="/api/projects/${repo}"`,
-		`data-nd-defer`,
+		`data-nd-bind="/api/projects?org=${org}&amp;search=${repoSearch}&amp;summary=1"`,
+		`data-nd-bind="/api/runs?limit=20"`,
 		`data-nd-ws="${runs-ws}"`,
 		`data-nd-ws-filter="type:run"`,
 		`data-nd-mode="prepend"`,
@@ -182,6 +187,43 @@ func TestDashboardTemplateDataNdAttributes(t *testing.T) {
 		if !strings.Contains(body, attr) {
 			t.Errorf("expected data-nd attribute %q in rendered output", attr)
 		}
+	}
+}
+
+func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/global", nil)
+	req.Host = "localhost:16384"
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"Global Workflows",
+		"global-ci",
+		"Lint | make lint",
+		"Test | make test",
+		`data-nd-action="POST /api/workflow-config?scope=global"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("expected global configuration page to contain %q", expected)
+		}
+	}
+}
+
+func TestConfigurationTemplateMissingRepo404s(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/nitecon/missing", nil)
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown repo, got %d", rec.Code)
 	}
 }
 
@@ -197,7 +239,7 @@ func TestDashboardTemplateConformance(t *testing.T) {
 
 	// Fix 1: runs binding must live on <tbody>, not on the section or table.
 	// Confirm the tbody carries the bind and no stray bind remains on the section.
-	if !strings.Contains(body, `<tbody data-nd-bind="/api/runs?repo=${repo}&amp;limit=20"`) {
+	if !strings.Contains(body, `<tbody data-nd-bind="/api/runs?limit=20"`) {
 		t.Error("expected runs binding on <tbody>, not on section or table")
 	}
 	// The section itself must not carry a data-nd-bind (which would destroy table structure).
@@ -234,15 +276,8 @@ func TestDashboardTemplateConformance(t *testing.T) {
 		t.Error("must not use conflicting always-on <link data-nd-theme-href> tags")
 	}
 
-	// Fix 4: project-detail binding must be on the inner body div, not the section.
-	// The inner container carries the bind; the section header is preserved.
-	if !strings.Contains(body, `id="project-detail-body"`) {
-		t.Error("expected #project-detail-body inner container for the project bind")
-	}
-	// The section element itself must not carry data-nd-bind (which would wipe the header).
-	if strings.Contains(body, `id="project-detail"`+"\n"+"                 data-nd-bind") ||
-		strings.Contains(body, `id="project-detail" data-nd-bind`) {
-		t.Error("section#project-detail must not carry data-nd-bind — bind lives on inner div")
+	if strings.Contains(body, `id="project-detail"`) {
+		t.Error("dashboard must not render stale selected-project detail panels")
 	}
 }
 

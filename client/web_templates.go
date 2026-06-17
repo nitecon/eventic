@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 //go:embed templates/*.html
@@ -20,16 +22,25 @@ var dashboardTmpl = template.Must(
 		ParseFS(templateFS, "templates/dashboard.html"),
 )
 
+var configurationTmpl = template.Must(
+	template.New("configuration.html").
+		Delims("[[", "]]").
+		ParseFS(templateFS, "templates/configuration.html"),
+)
+
 // dashboardView is the server-side view-model rendered into the dashboard
 // template for each request. It carries the left-nav hierarchy (built from the
 // ProjectStore) and the computed WebSocket base URL.
 type dashboardView struct {
 	// Brand is the short app name shown in the sidebar and browser tab.
 	Brand string
-	// Global lists workflows with global scope.
-	Global []navWorkflow
-	// Projects lists per-repo nav groups, each with their workflows.
-	Projects []navProject
+	// Orgs lists repository owners available in the organization selector.
+	Orgs []string
+	// DefaultOrg is the initially selected organization.
+	DefaultOrg string
+	// Projects lists initial repositories for DefaultOrg. The browser refreshes
+	// this list through /api/projects?summary=1 after ndesign starts.
+	Projects []ProjectSummary
 	// WSBase is the absolute WebSocket URL prefix, e.g. ws://host/ws/runs.
 	// It is injected as an <meta name="endpoint:runs-ws"> so ndesign markup can
 	// reference it via ${runs-ws} in data-nd-ws attributes.
@@ -38,36 +49,16 @@ type dashboardView struct {
 	APIBase string
 }
 
-// navProject is one project entry in the left-nav hierarchy.
-type navProject struct {
-	// Repo is the full "org/repo" identifier.
-	Repo string
-	// Workflows lists the configured workflows under this project.
-	Workflows []navWorkflow
-}
-
-// navWorkflow is one workflow entry within a nav group.
-type navWorkflow struct {
-	// ID is the workflow database id, used to construct sidebar anchors.
-	ID int64
-	// Name is the human-readable workflow name.
-	Name string
-	// EventType is the event.action key this workflow responds to.
-	EventType string
-	// Scope is "global" or "repo".
-	Scope string
-	// Enabled indicates whether the workflow is currently active.
-	Enabled bool
-	// Steps lists the workflow's nodes in DAG order (as returned by GetWorkflow).
-	Steps []navStep
-}
-
-// navStep is one node rendered beneath a workflow in the sidebar.
-type navStep struct {
-	// Name is the human-readable node name (may be empty for anonymous nodes).
-	Name string
-	// Command is the shell command, shown as a fallback when Name is empty.
-	Command string
+type configurationView struct {
+	Brand     string
+	Title     string
+	Scope     string
+	Repo      string
+	Owner     string
+	Name      string
+	IsGlobal  bool
+	Project   *ProjectState
+	Workflows []workflowConfig
 }
 
 // indexHandler serves the dashboard at "/". When StaticDir contains an
@@ -99,6 +90,83 @@ func indexHandler(cfg Config, store *ProjectStore) http.Handler {
 	})
 }
 
+func configurationHandler(store *ProjectStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if store == nil {
+			http.Error(w, "project store disabled", http.StatusServiceUnavailable)
+			return
+		}
+
+		view, ok, err := buildConfigurationView(r, store)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if isNotFound(err) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "configuration error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := configurationTmpl.Execute(w, view); err != nil {
+			http.Error(w, "template error", http.StatusInternalServerError)
+		}
+	})
+}
+
+func buildConfigurationView(r *http.Request, store *ProjectStore) (configurationView, bool, error) {
+	scope, repo, ok := configurationRoute(r.URL.Path)
+	if !ok {
+		return configurationView{}, false, nil
+	}
+
+	view := configurationView{
+		Brand:    "Eventic",
+		Scope:    scope,
+		Repo:     repo,
+		IsGlobal: scope == WorkflowScopeGlobal,
+	}
+	if view.IsGlobal {
+		view.Title = "Global Workflows"
+	} else {
+		view.Owner, view.Name = splitRepoName(repo)
+		view.Title = repo
+		project, err := store.GetProject(r.Context(), repo)
+		if err != nil {
+			return configurationView{}, true, err
+		}
+		view.Project = project
+	}
+
+	workflows, err := listWorkflowConfigs(r.Context(), store, scope, repo)
+	if err != nil {
+		return configurationView{}, true, err
+	}
+	view.Workflows = workflows
+	return view, true, nil
+}
+
+func configurationRoute(path string) (string, string, bool) {
+	clean := strings.Trim(path, "/")
+	if clean == "global" {
+		return WorkflowScopeGlobal, "", true
+	}
+
+	parts := strings.Split(clean, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return WorkflowScopeRepo, parts[0] + "/" + parts[1], true
+}
+
 // buildDashboardView constructs the dashboardView from the store and the
 // incoming request. It is nil-safe: a nil store yields an empty nav while
 // the page shell still renders correctly.
@@ -106,73 +174,51 @@ func buildDashboardView(r *http.Request, store *ProjectStore) dashboardView {
 	ctx := r.Context()
 
 	view := dashboardView{
-		Brand:   "Eventic",
-		WSBase:  wsBase(r),
-		APIBase: "",
+		Brand:      "Eventic",
+		DefaultOrg: "nitecon",
+		WSBase:     wsBase(r),
+		APIBase:    "",
 	}
 
 	if store == nil {
 		return view
 	}
 
-	// ── Global workflows ────────────────────────────────────────────────────
-	globalWFs, _ := store.ListWorkflows(ctx, WorkflowScopeGlobal, "", "")
-	for _, wf := range globalWFs {
-		full, err := store.GetWorkflow(ctx, wf.ID)
-		if err != nil || full == nil {
-			view.Global = append(view.Global, navWorkflow{
-				ID:        wf.ID,
-				Name:      wf.Name,
-				EventType: wf.EventType,
-				Scope:     wf.Scope,
-				Enabled:   wf.Enabled,
-			})
-			continue
-		}
-		view.Global = append(view.Global, navWorkflowFrom(*full))
+	allProjects, _ := store.ListProjectSummaries(ctx, "", "")
+	view.Orgs = projectOrgs(allProjects)
+	if !containsString(view.Orgs, view.DefaultOrg) && len(view.Orgs) > 0 {
+		view.DefaultOrg = view.Orgs[0]
 	}
-
-	// ── Per-project workflows ────────────────────────────────────────────────
-	repos, _ := store.ListProjects(ctx)
-	for _, repo := range repos {
-		projectWFs, _ := store.ListWorkflows(ctx, WorkflowScopeRepo, repo, "")
-		nav := navProject{Repo: repo}
-		for _, wf := range projectWFs {
-			full, err := store.GetWorkflow(ctx, wf.ID)
-			if err != nil || full == nil {
-				nav.Workflows = append(nav.Workflows, navWorkflow{
-					ID:        wf.ID,
-					Name:      wf.Name,
-					EventType: wf.EventType,
-					Scope:     wf.Scope,
-					Enabled:   wf.Enabled,
-				})
-				continue
-			}
-			nav.Workflows = append(nav.Workflows, navWorkflowFrom(*full))
-		}
-		view.Projects = append(view.Projects, nav)
+	if view.DefaultOrg != "" {
+		view.Projects, _ = store.ListProjectSummaries(ctx, view.DefaultOrg, "")
 	}
 
 	return view
 }
 
-// navWorkflowFrom converts a full Workflow (with nodes) to a navWorkflow.
-func navWorkflowFrom(wf Workflow) navWorkflow {
-	nav := navWorkflow{
-		ID:        wf.ID,
-		Name:      wf.Name,
-		EventType: wf.EventType,
-		Scope:     wf.Scope,
-		Enabled:   wf.Enabled,
+func projectOrgs(projects []ProjectSummary) []string {
+	seen := map[string]struct{}{}
+	for _, project := range projects {
+		if project.Owner == "" {
+			continue
+		}
+		seen[project.Owner] = struct{}{}
 	}
-	for _, node := range wf.Nodes {
-		nav.Steps = append(nav.Steps, navStep{
-			Name:    node.Name,
-			Command: node.Command,
-		})
+	orgs := make([]string, 0, len(seen))
+	for org := range seen {
+		orgs = append(orgs, org)
 	}
-	return nav
+	sort.Strings(orgs)
+	return orgs
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // wsBase derives the absolute WebSocket URL prefix from the request, e.g.

@@ -23,6 +23,8 @@
   <meta name="endpoint:runs-ws" content="[[ .WSBase ]]">
   <!-- Variable defaults: repo starts empty so deferred panels stay quiet until a project is chosen. -->
   <meta name="var:repo" content="">
+  <meta name="var:org" content="[[ .DefaultOrg ]]">
+  <meta name="var:repoSearch" content="">
 </head>
 <body class="app-page">
   <div class="app-layout nd-h-screen nd-overflow-hidden">
@@ -33,48 +35,58 @@
         <a href="/">Eventic</a>
       </div>
 
-      <!-- Global workflows -->
-      [[ if .Global ]]
-      <span class="nd-nav-section">Global</span>
-      <ul class="nd-nav-menu">
-        [[ range .Global ]]
-        <li>
-          <a href="#global-[[ .ID ]]">[[ .Name ]] <span class="nd-badge nd-badge-info">[[ .EventType ]]</span></a>
-          [[ if .Steps ]]
-          <ul class="nd-nav-menu">
-            [[ range .Steps ]]
-            <li><a href="#step-[[ .Name ]]">[[ if .Name ]][[ .Name ]][[ else ]][[ .Command ]][[ end ]]</a></li>
-            [[ end ]]
-          </ul>
+      <span class="nd-nav-section">Organization</span>
+      <div class="nd-form-group">
+        <label for="org-select">Organization</label>
+        <select id="org-select" data-nd-model="org">
+          [[ if .Orgs ]]
+          [[ range .Orgs ]]
+          <option value="[[ . ]]" [[ if eq . $.DefaultOrg ]]selected[[ end ]]>[[ . ]]</option>
           [[ end ]]
-        </li>
-        [[ end ]]
-      </ul>
-      [[ end ]]
+          [[ else ]]
+          <option value="nitecon" selected>nitecon</option>
+          [[ end ]]
+        </select>
+      </div>
+      <div class="nd-form-group">
+        <label for="repo-search">Search</label>
+        <input id="repo-search" type="search" data-nd-model="repoSearch" autocomplete="off">
+      </div>
+      <button type="button"
+              class="nd-btn-primary nd-btn-sm"
+              data-nd-set="org=${org}, repoSearch=${repoSearch}"
+              data-nd-success="refresh:#repo-nav-list,refresh:#projects-overview-list">Apply</button>
+      <button type="button"
+              class="nd-btn-ghost nd-btn-sm"
+              data-nd-set="repoSearch=''"
+              data-nd-success="refresh:#repo-nav-list,refresh:#projects-overview-list">Clear</button>
 
-      <!-- Per-project workflows -->
-      [[ range .Projects ]]
-      <span class="nd-nav-section">[[ .Repo ]]</span>
+      <span class="nd-nav-section">Workflows</span>
       <ul class="nd-nav-menu">
         <li>
-          <a href="#"
-             data-nd-set="repo=[[ .Repo ]]"
-             data-nd-success="refresh:#project-detail,refresh:#project-runs">[[ .Repo ]]</a>
+          <a href="/global">Global Workflows</a>
         </li>
-        [[ range .Workflows ]]
+      </ul>
+
+      <span class="nd-nav-section">Repositories</span>
+      <ul class="nd-nav-menu"
+          id="repo-nav-list"
+          data-nd-bind="/api/projects?org=${org}&amp;search=${repoSearch}&amp;summary=1"
+          data-nd-template="repo-nav-row-tmpl"
+          data-nd-refresh="30000">
+        [[ range .Projects ]]
         <li>
-          <a href="#proj-wf-[[ .ID ]]">[[ .Name ]] <span class="nd-badge [[ if .Enabled ]]nd-badge-success[[ else ]]nd-badge-info[[ end ]]">[[ .EventType ]]</span></a>
-          [[ if .Steps ]]
-          <ul class="nd-nav-menu">
-            [[ range .Steps ]]
-            <li><a href="#">[[ if .Name ]][[ .Name ]][[ else ]][[ .Command ]][[ end ]]</a></li>
-            [[ end ]]
-          </ul>
-          [[ end ]]
+          <a href="/[[ .Owner ]]/[[ .Name ]]"
+             title="[[ .Repo ]]">[[ .Name ]]</a>
         </li>
         [[ end ]]
       </ul>
-      [[ end ]]
+      <template id="repo-nav-row-tmpl">
+        <li>
+          <a href="/{{owner}}/{{name}}"
+             title="{{repo}}">{{name}}</a>
+        </li>
+      </template>
     </nav>
     <!-- ── App body ──────────────────────────────────────────────────────── -->
     <div class="app-body">
@@ -93,51 +105,6 @@
 
       <main class="app-content">
 
-        <!-- ── Project detail panel ──────────────────────────────────────── -->
-        <section class="nd-panel" id="project-detail">
-          <header class="nd-panel-header">
-            <h2>Project</h2>
-          </header>
-          <!-- Binding lives on the inner container so the panel header is never replaced. -->
-          <div id="project-detail-body"
-               data-nd-bind="/api/projects/${repo}"
-               data-nd-defer
-               data-nd-template="project-card-tmpl">
-            <p class="nd-well-title">Select a project from the sidebar to view its status.</p>
-          </div>
-        </section>
-
-        <!-- ndesign row template for a ProjectState object -->
-        <template id="project-card-tmpl">
-          <article class="nd-card">
-            <header class="nd-card-header">
-              <h3 class="nd-card-title">{{repo}}</h3>
-              <span class="nd-badge nd-badge-info">{{state}}</span>
-            </header>
-            <div class="nd-card-body">
-              <div class="nd-well nd-well-sm">
-                <p class="nd-well-title">Ref</p>
-                <pre><code>{{ref}}</code></pre>
-              </div>
-              <div class="nd-well nd-well-sm">
-                <p class="nd-well-title">Hash</p>
-                <pre><code>{{hash}}</code></pre>
-              </div>
-              <div class="nd-well nd-well-sm">
-                <p class="nd-well-title">Event / Action</p>
-                <pre><code>{{event}} / {{action}}</code></pre>
-              </div>
-              <div class="nd-well nd-well-sm">
-                <p class="nd-well-title">Latest Output</p>
-                <pre><code>{{latest_output}}</code></pre>
-              </div>
-            </div>
-            <footer class="nd-card-footer">
-              Updated: {{updated_at}}
-            </footer>
-          </article>
-        </template>
-
         <!-- ── Recent runs panel ─────────────────────────────────────────── -->
         <!-- Binding is on the <tbody> only — section and table are structural shells.     -->
         <!-- data-nd-select is omitted: the /api/runs endpoint returns a plain JSON array. -->
@@ -150,6 +117,7 @@
               <table class="nd-table-striped nd-table-hover">
                 <thead>
                   <tr>
+                    <th>Repo</th>
                     <th>Event</th>
                     <th>State</th>
                     <th>Trigger</th>
@@ -157,8 +125,7 @@
                     <th>Duration (ms)</th>
                   </tr>
                 </thead>
-                <tbody data-nd-bind="/api/runs?repo=${repo}&amp;limit=20"
-                       data-nd-defer
+                <tbody data-nd-bind="/api/runs?limit=20"
                        data-nd-template="run-row-tmpl">
                 </tbody>
               </table>
@@ -169,6 +136,7 @@
         <!-- ndesign row template for WorkflowRun rows -->
         <template id="run-row-tmpl">
           <tr>
+            <td>{{repo}}</td>
             <td>{{event_type}}</td>
             <td><span class="nd-badge nd-badge-info">{{state}}</span></td>
             <td>{{trigger}}</td>
@@ -232,7 +200,8 @@
               <h3 class="nd-card-title">Managed Repositories</h3>
             </header>
             <div class="nd-card-body">
-              <ul data-nd-bind="/api/projects"
+              <ul id="projects-overview-list"
+                  data-nd-bind="/api/projects?org=${org}&amp;search=${repoSearch}&amp;summary=1"
                   data-nd-refresh="30000"
                   data-nd-template="project-overview-row-tmpl">
               </ul>
@@ -240,12 +209,10 @@
           </article>
         </section>
 
-        <!-- ndesign row template for the projects string array -->
+        <!-- ndesign row template for ProjectSummary rows. -->
         <template id="project-overview-row-tmpl">
           <li>
-            <a href="#"
-               data-nd-set="repo={{.}}"
-               data-nd-success="refresh:#project-detail,refresh:#project-runs">{{.}}</a>
+            <a href="/{{owner}}/{{name}}">{{repo}}</a>
           </li>
         </template>
 

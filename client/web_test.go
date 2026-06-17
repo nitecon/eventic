@@ -78,6 +78,24 @@ func TestEventsHandlerReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestWebMuxRoutePatternsDoNotConflict(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
+	defer store.Close()
+
+	mux := webMux(Config{}, NewExecutionLog(WebConfig{}), store, func(context.Context, protocol.EventMsg) {})
+	for _, path := range []string{"/", "/global", "/api/projects"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code == http.StatusNotFound {
+			t.Fatalf("route %s unexpectedly returned 404", path)
+		}
+	}
+}
+
 func TestIndexHandlerServesEmbeddedDashboard(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:16384"
@@ -371,6 +389,69 @@ func TestWorkflowCRUDLifecycle(t *testing.T) {
 	}
 }
 
+func TestWorkflowConfigLifecycle(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
+	defer store.Close()
+
+	collection := workflowConfigCollectionHandler(store)
+
+	createBody := `{"name":"ci","event_type":"push","steps":"Lint | make lint\nmake test"}`
+	rec := httptest.NewRecorder()
+	collection.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workflow-config?scope=repo&repo=nitecon/eventic", strings.NewReader(createBody)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create config: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created config: %v", err)
+	}
+	if created.ID == 0 || created.StepsCount != 2 {
+		t.Fatalf("unexpected created config: %#v", created)
+	}
+
+	full, err := store.GetWorkflow(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("read created workflow: %v", err)
+	}
+	if len(full.Nodes) != 2 || len(full.Edges) != 1 {
+		t.Fatalf("expected linear 2-node workflow, got nodes=%d edges=%d", len(full.Nodes), len(full.Edges))
+	}
+	if full.Nodes[0].Name != "Lint" || full.Nodes[0].Command != "make lint" {
+		t.Fatalf("unexpected first node: %#v", full.Nodes[0])
+	}
+
+	rec = httptest.NewRecorder()
+	collection.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workflow-config?scope=repo&repo=nitecon/eventic", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list config: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var listed []workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode listed configs: %v", err)
+	}
+	if len(listed) != 1 || listed[0].StepsCount != 2 {
+		t.Fatalf("unexpected config list: %#v", listed)
+	}
+
+	updateBody := `{"name":"ci","event_type":"pull_request.opened","steps":"make verify"}`
+	rec = httptest.NewRecorder()
+	itemPath := fmt.Sprintf("/api/workflow-config/%d", created.ID)
+	workflowConfigItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, itemPath, strings.NewReader(updateBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update config: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var updated workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated config: %v", err)
+	}
+	if updated.EventType != "pull_request.opened" || updated.StepsCount != 1 {
+		t.Fatalf("unexpected updated config: %#v", updated)
+	}
+}
+
 func TestWorkflowCreateRejectsMissingName(t *testing.T) {
 	store, err := OpenMemoryProjectStore(t.Context())
 	if err != nil {
@@ -493,6 +574,65 @@ func TestProjectsHandlerReturnsProjectNameList(t *testing.T) {
 		if !seen[repo] {
 			t.Fatalf("expected project %q in %#v", repo, projects)
 		}
+	}
+}
+
+func TestProjectsHandlerReturnsProjectSummariesFilteredAndSorted(t *testing.T) {
+	ctx := t.Context()
+	store, err := OpenProjectStore(ctx, StateConfig{
+		Enabled: true,
+		Path:    t.TempDir() + "/eventic.db",
+	})
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	defer store.Close()
+
+	store.UpsertManagedProject(ctx, "nitecon/alpha", "main", "aaa111")
+	store.UpsertManagedProject(ctx, "nitecon/zulu", "main", "zzz999")
+	store.UpsertManagedProject(ctx, "brucehq/bruce", "main", "bbb222")
+	newer := testTime().Add(time.Hour)
+	older := testTime()
+	if _, err := store.db.ExecContext(ctx, `UPDATE projects SET updated_at = ? WHERE repo IN (?, ?)`, newer, "nitecon/alpha", "nitecon/zulu"); err != nil {
+		t.Fatalf("set newer timestamps: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE projects SET updated_at = ? WHERE repo = ?`, older, "brucehq/bruce"); err != nil {
+		t.Fatalf("set older timestamp: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects?org=nitecon&summary=1", nil)
+	rec := httptest.NewRecorder()
+
+	apiProjectsHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	var projects []ProjectSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &projects); err != nil {
+		t.Fatalf("expected json summary response: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("expected two nitecon projects, got %#v", projects)
+	}
+	if projects[0].Repo != "nitecon/zulu" || projects[1].Repo != "nitecon/alpha" {
+		t.Fatalf("expected name-desc tie sort within updated_at, got %#v", projects)
+	}
+	if projects[0].Owner != "nitecon" || projects[0].Name != "zulu" {
+		t.Fatalf("expected owner/name split, got %#v", projects[0])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/projects?org=nitecon&search=alp", nil)
+	rec = httptest.NewRecorder()
+	apiProjectsHandler(store).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("search: expected status 200, got %d", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &projects); err != nil {
+		t.Fatalf("search: expected json summary response: %v", err)
+	}
+	if len(projects) != 1 || projects[0].Repo != "nitecon/alpha" {
+		t.Fatalf("expected search to return alpha only, got %#v", projects)
 	}
 }
 

@@ -266,37 +266,7 @@ func StartWebConsole(ctx context.Context, cfg Config, logStore *ExecutionLog, pr
 		listen = defaultWebListen
 	}
 
-	mux := http.NewServeMux()
-
-	// Dashboard shell: a user-supplied static dir (ndesign markup) or the
-	// embedded Go-template dashboard. The store is passed so the left-nav
-	// hierarchy can be server-rendered on each request.
-	mux.Handle("/", indexHandler(cfg, projectStore))
-
-	// ── ndesign JSON API ─────────────────────────────────────────────────────
-	mux.HandleFunc("/api/workflows", workflowsCollectionHandler(projectStore))
-	mux.HandleFunc("/api/workflows/", workflowItemHandler(projectStore))
-	mux.HandleFunc("/api/event-types", eventTypesHandler())
-	mux.HandleFunc("/api/projects", apiProjectsHandler(projectStore))
-	mux.HandleFunc("/api/projects/", apiProjectsHandler(projectStore))
-	mux.HandleFunc("/api/refs", apiRefsHandler(cfg))
-	mux.HandleFunc("/api/runs", runsCollectionHandler(projectStore, replay))
-	mux.HandleFunc("/api/runs/", runItemHandler(projectStore))
-
-	// SSE fallback for environments without WebSocket support.
-	mux.HandleFunc("/api/runs/stream", eventsStreamHandler(logStore))
-
-	// ── Live WebSocket stream (ndesign conventions) ──────────────────────────
-	mux.HandleFunc("/ws/runs", wsRunsHandler(cfg.Web, logStore))
-
-	// ── Back-compat aliases (pre-ndesign console) ────────────────────────────
-	mux.HandleFunc("/events", eventsHandler(logStore))
-	mux.HandleFunc("/events/stream", eventsStreamHandler(logStore))
-
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	mux := webMux(cfg, logStore, projectStore, replay)
 
 	srv := &http.Server{
 		Addr:              listen,
@@ -319,6 +289,45 @@ func StartWebConsole(ctx context.Context, cfg Config, logStore *ExecutionLog, pr
 		return nil
 	}
 	return err
+}
+
+func webMux(cfg Config, logStore *ExecutionLog, projectStore *ProjectStore, replay ReplayDispatcher) http.Handler {
+	mux := http.NewServeMux()
+	// Dashboard shell: a user-supplied static dir (ndesign markup) or the
+	// embedded Go-template dashboard. The store is passed so the left-nav
+	// hierarchy can be server-rendered on each request.
+	mux.Handle("/global", configurationHandler(projectStore))
+	mux.Handle("/{org}/{repo}", configurationHandler(projectStore))
+	mux.Handle("/", indexHandler(cfg, projectStore))
+
+	// ── ndesign JSON API ─────────────────────────────────────────────────────
+	mux.HandleFunc("/api/workflows", workflowsCollectionHandler(projectStore))
+	mux.HandleFunc("/api/workflows/", workflowItemHandler(projectStore))
+	mux.HandleFunc("/api/workflow-config", workflowConfigCollectionHandler(projectStore))
+	mux.HandleFunc("/api/workflow-config/", workflowConfigItemHandler(projectStore))
+	mux.HandleFunc("/api/event-types", eventTypesHandler())
+	mux.HandleFunc("/api/projects", apiProjectsHandler(projectStore))
+	mux.HandleFunc("/api/projects/", apiProjectsHandler(projectStore))
+	mux.HandleFunc("/api/refs", apiRefsHandler(cfg))
+	mux.HandleFunc("/api/runs", runsCollectionHandler(projectStore, replay))
+	mux.HandleFunc("/api/runs/", runItemHandler(projectStore))
+
+	// SSE fallback for environments without WebSocket support.
+	mux.HandleFunc("/api/runs/stream", eventsStreamHandler(logStore))
+
+	// ── Live WebSocket stream (ndesign conventions) ──────────────────────────
+	mux.HandleFunc("/ws/runs", wsRunsHandler(cfg.Web, logStore))
+
+	// ── Back-compat aliases (pre-ndesign console) ────────────────────────────
+	mux.HandleFunc("/events", eventsHandler(logStore))
+	mux.HandleFunc("/events/stream", eventsStreamHandler(logStore))
+
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	return mux
 }
 
 func repoPathForWeb(reposDir, repo string) (string, error) {
