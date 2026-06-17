@@ -148,23 +148,59 @@ func workflowItemHandler(store *ProjectStore) http.HandlerFunc {
 // workflowConfig is a dashboard-friendly projection of Workflow that flattens
 // command nodes into an editable newline-delimited step list.
 type workflowConfig struct {
-	ID         int64     `json:"id"`
-	Scope      string    `json:"scope"`
-	Repo       string    `json:"repo"`
-	EventType  string    `json:"event_type"`
-	Name       string    `json:"name"`
-	Enabled    bool      `json:"enabled"`
-	Steps      string    `json:"steps"`
-	StepsCount int       `json:"steps_count"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         int64                `json:"id"`
+	Scope      string               `json:"scope"`
+	Repo       string               `json:"repo"`
+	EventType  string               `json:"event_type"`
+	Name       string               `json:"name"`
+	Enabled    bool                 `json:"enabled"`
+	Steps      string               `json:"steps"`
+	TypedSteps []workflowStepConfig `json:"typed_steps"`
+	StepsCount int                  `json:"steps_count"`
+	UpdatedAt  time.Time            `json:"updated_at"`
 }
 
 type workflowConfigRequest struct {
-	Scope     string `json:"scope"`
-	Repo      string `json:"repo"`
-	EventType string `json:"event_type"`
-	Name      string `json:"name"`
-	Steps     string `json:"steps"`
+	Scope               string                `json:"scope"`
+	Repo                string                `json:"repo"`
+	EventType           string                `json:"event_type"`
+	Name                string                `json:"name"`
+	Steps               string                `json:"steps"`
+	TypedSteps          []workflowStepRequest `json:"typed_steps"`
+	StepName            string                `json:"step_name"`
+	ActionType          string                `json:"action_type"`
+	Type                string                `json:"type"`
+	Command             string                `json:"command"`
+	HTTPMethod          string                `json:"http_method"`
+	HTTPURL             string                `json:"http_url"`
+	HTTPHeaders         string                `json:"http_headers"`
+	HTTPBody            string                `json:"http_body"`
+	ProjectRepo         string                `json:"project_repo"`
+	ProjectRef          string                `json:"project_ref"`
+	ProjectMessage      string                `json:"project_message"`
+	ProjectEvent        string                `json:"project_event_type"`
+	ResultStatuses      string                `json:"result_statuses"`
+	ResultExitCodes     string                `json:"result_exit_codes"`
+	ResponseMode        string                `json:"response_mode"`
+	ResponsePath        string                `json:"response_path"`
+	ResponseCapture     string                `json:"response_capture"`
+	PostActionName      string                `json:"post_action_name"`
+	PostActionType      string                `json:"post_action_type"`
+	PostCommand         string                `json:"post_command"`
+	PostHTTPMethod      string                `json:"post_http_method"`
+	PostHTTPURL         string                `json:"post_http_url"`
+	PostHTTPHeaders     string                `json:"post_http_headers"`
+	PostHTTPBody        string                `json:"post_http_body"`
+	PostProjectRepo     string                `json:"post_project_repo"`
+	PostProjectRef      string                `json:"post_project_ref"`
+	PostProjectMsg      string                `json:"post_project_message"`
+	PostProjectEvent    string                `json:"post_project_event_type"`
+	PostResultStatuses  string                `json:"post_result_statuses"`
+	PostResultExitCodes string                `json:"post_result_exit_codes"`
+	PostContinueOnError boolish               `json:"post_continue_on_error"`
+	PostTimeoutSeconds  intish                `json:"post_timeout_seconds"`
+	ContinueOnError     boolish               `json:"continue_on_error"`
+	TimeoutSeconds      intish                `json:"timeout_seconds"`
 }
 
 func workflowConfigCollectionHandler(store *ProjectStore) http.HandlerFunc {
@@ -220,8 +256,12 @@ func workflowConfigItemHandler(store *ProjectStore) http.HandlerFunc {
 			return
 		}
 
-		id, ok := parsePathID(w, r, "/api/workflow-config/")
+		id, stepPath, ok := parseWorkflowConfigPath(w, r)
 		if !ok {
+			return
+		}
+		if stepPath != "" {
+			workflowConfigStepHandler(store, id, stepPath).ServeHTTP(w, r)
 			return
 		}
 
@@ -311,7 +351,7 @@ func workflowFromConfig(req workflowConfigRequest, scope, repo string, existing 
 		enabled = existing.Enabled
 	}
 
-	nodes, edges, stepsErr := parseWorkflowConfigSteps(req.Steps)
+	nodes, edges, stepsErr := workflowGraphFromConfigRequest(req, existing)
 	wf := Workflow{
 		Scope:     strings.TrimSpace(scope),
 		Repo:      strings.TrimSpace(repo),
@@ -332,6 +372,36 @@ func workflowFromConfig(req workflowConfigRequest, scope, repo string, existing 
 		return Workflow{}, fieldErrs
 	}
 	return wf, nil
+}
+
+func workflowGraphFromConfigRequest(req workflowConfigRequest, existing *Workflow) ([]WorkflowNode, []WorkflowEdge, string) {
+	switch {
+	case len(req.TypedSteps) > 0:
+		nodes := make([]WorkflowNode, 0, len(req.TypedSteps))
+		for i, stepReq := range req.TypedSteps {
+			node, msg := workflowNodeFromStepRequest(stepReq, i+1, nil)
+			if msg != "" {
+				return nil, nil, msg
+			}
+			if hasNodeKey(nodes, node.NodeKey) {
+				return nil, nil, fmt.Sprintf("duplicate node_key %q", node.NodeKey)
+			}
+			nodes = append(nodes, node)
+		}
+		return nodes, linearWorkflowEdges(nodes), ""
+	case hasWorkflowStepPayload(workflowStepRequestFromConfig(req)):
+		node, msg := workflowNodeFromStepRequest(workflowStepRequestFromConfig(req), 1, nil)
+		if msg != "" {
+			return nil, nil, msg
+		}
+		return []WorkflowNode{node}, nil, ""
+	case strings.TrimSpace(req.Steps) != "":
+		return parseWorkflowConfigSteps(req.Steps)
+	case existing != nil:
+		return existing.Nodes, existing.Edges, ""
+	default:
+		return nil, nil, "at least one step is required"
+	}
 }
 
 func parseWorkflowConfigSteps(steps string) ([]WorkflowNode, []WorkflowEdge, string) {
@@ -355,7 +425,7 @@ func parseWorkflowConfigSteps(steps string) ([]WorkflowNode, []WorkflowEdge, str
 		nodes = append(nodes, WorkflowNode{
 			NodeKey: fmt.Sprintf("step-%d", index),
 			Name:    name,
-			Type:    "command",
+			Type:    WorkflowActionRunCommand,
 			Command: command,
 			PosX:    float64((index - 1) * 220),
 			PosY:    0,
@@ -376,13 +446,228 @@ func parseWorkflowConfigSteps(steps string) ([]WorkflowNode, []WorkflowEdge, str
 	return nodes, edges, ""
 }
 
+func workflowConfigStepHandler(store *ProjectStore, id int64, stepPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(stepPath, "/"), "/")
+		if len(parts) == 0 || parts[0] != "steps" {
+			globalError(w, http.StatusNotFound, "not found")
+			return
+		}
+
+		wf, err := store.GetWorkflow(r.Context(), id)
+		if isNotFound(err) {
+			globalError(w, http.StatusNotFound, "workflow not found")
+			return
+		}
+		if err != nil {
+			globalError(w, http.StatusInternalServerError, "failed to read workflow")
+			return
+		}
+
+		switch {
+		case len(parts) == 1 && r.Method == http.MethodPost:
+			req, ok := decodeWorkflowStepRequest(w, r)
+			if !ok {
+				return
+			}
+			if req.NodeKey == "" {
+				req.NodeKey = nextWorkflowStepKey(wf.Nodes)
+			}
+			node, msg := workflowNodeFromStepRequest(req, len(wf.Nodes)+1, nil)
+			if msg != "" {
+				writeAPIError(w, http.StatusUnprocessableEntity, map[string]string{"steps": msg})
+				return
+			}
+			if hasNodeKey(wf.Nodes, node.NodeKey) {
+				writeAPIError(w, http.StatusUnprocessableEntity, map[string]string{"node_key": "already exists"})
+				return
+			}
+			wf.Nodes = append(wf.Nodes, node)
+			wf.Edges = linearWorkflowEdges(wf.Nodes)
+			if fieldErrs := validateWorkflow(wf); fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			if err := store.UpdateWorkflow(r.Context(), wf); err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to append workflow step")
+				return
+			}
+			updated, err := store.GetWorkflow(r.Context(), id)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read updated workflow")
+				return
+			}
+			writeJSON(w, http.StatusCreated, workflowConfigFrom(*updated))
+		case len(parts) == 2 && r.Method == http.MethodPut:
+			nodeKey := parts[1]
+			index := workflowNodeIndex(wf.Nodes, nodeKey)
+			if index < 0 {
+				globalError(w, http.StatusNotFound, "workflow step not found")
+				return
+			}
+			req, ok := decodeWorkflowStepRequest(w, r)
+			if !ok {
+				return
+			}
+			req.NodeKey = nodeKey
+			node, msg := workflowNodeFromStepRequest(req, index+1, &wf.Nodes[index])
+			if msg != "" {
+				writeAPIError(w, http.StatusUnprocessableEntity, map[string]string{"steps": msg})
+				return
+			}
+			wf.Nodes[index] = node
+			wf.Edges = linearWorkflowEdges(wf.Nodes)
+			if fieldErrs := validateWorkflow(wf); fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			if err := store.UpdateWorkflow(r.Context(), wf); err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to update workflow step")
+				return
+			}
+			updated, err := store.GetWorkflow(r.Context(), id)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read updated workflow")
+				return
+			}
+			writeJSON(w, http.StatusOK, workflowConfigFrom(*updated))
+		case len(parts) == 2 && r.Method == http.MethodDelete:
+			nodeKey := parts[1]
+			index := workflowNodeIndex(wf.Nodes, nodeKey)
+			if index < 0 {
+				globalError(w, http.StatusNotFound, "workflow step not found")
+				return
+			}
+			wf.Nodes = append(wf.Nodes[:index], wf.Nodes[index+1:]...)
+			if len(wf.Nodes) == 0 {
+				writeAPIError(w, http.StatusUnprocessableEntity, map[string]string{"steps": "at least one step is required"})
+				return
+			}
+			wf.Edges = linearWorkflowEdges(wf.Nodes)
+			if fieldErrs := validateWorkflow(wf); fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			if err := store.UpdateWorkflow(r.Context(), wf); err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to delete workflow step")
+				return
+			}
+			updated, err := store.GetWorkflow(r.Context(), id)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to read updated workflow")
+				return
+			}
+			writeJSON(w, http.StatusOK, workflowConfigFrom(*updated))
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func decodeWorkflowStepRequest(w http.ResponseWriter, r *http.Request) (workflowStepRequest, bool) {
+	var req workflowStepRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		globalError(w, http.StatusBadRequest, "invalid workflow step payload")
+		return workflowStepRequest{}, false
+	}
+	return req, true
+}
+
+func hasWorkflowStepPayload(req workflowStepRequest) bool {
+	return strings.TrimSpace(firstNonEmpty(
+		req.ActionType,
+		req.Type,
+		req.Command,
+		req.HTTPURL,
+		req.ProjectRepo,
+		req.ProjectMessage,
+		req.ProjectEvent,
+	)) != ""
+}
+
+func workflowStepRequestFromConfig(req workflowConfigRequest) workflowStepRequest {
+	return workflowStepRequest{
+		StepName:            req.StepName,
+		Type:                req.Type,
+		ActionType:          req.ActionType,
+		Command:             req.Command,
+		HTTPMethod:          req.HTTPMethod,
+		HTTPURL:             req.HTTPURL,
+		HTTPHeaders:         req.HTTPHeaders,
+		HTTPBody:            req.HTTPBody,
+		ProjectRepo:         req.ProjectRepo,
+		ProjectRef:          req.ProjectRef,
+		ProjectMessage:      req.ProjectMessage,
+		ProjectEvent:        req.ProjectEvent,
+		ResultStatuses:      req.ResultStatuses,
+		ResultExitCodes:     req.ResultExitCodes,
+		ResponseMode:        req.ResponseMode,
+		ResponsePath:        req.ResponsePath,
+		ResponseCapture:     req.ResponseCapture,
+		PostActionName:      req.PostActionName,
+		PostActionType:      req.PostActionType,
+		PostCommand:         req.PostCommand,
+		PostHTTPMethod:      req.PostHTTPMethod,
+		PostHTTPURL:         req.PostHTTPURL,
+		PostHTTPHeaders:     req.PostHTTPHeaders,
+		PostHTTPBody:        req.PostHTTPBody,
+		PostProjectRepo:     req.PostProjectRepo,
+		PostProjectRef:      req.PostProjectRef,
+		PostProjectMsg:      req.PostProjectMsg,
+		PostProjectEvent:    req.PostProjectEvent,
+		PostResultStatuses:  req.PostResultStatuses,
+		PostResultExitCodes: req.PostResultExitCodes,
+		PostContinueOnError: req.PostContinueOnError,
+		PostTimeoutSeconds:  req.PostTimeoutSeconds,
+		ContinueOnError:     req.ContinueOnError,
+		TimeoutSeconds:      req.TimeoutSeconds,
+	}
+}
+
+func linearWorkflowEdges(nodes []WorkflowNode) []WorkflowEdge {
+	if len(nodes) < 2 {
+		return nil
+	}
+	edges := make([]WorkflowEdge, 0, len(nodes)-1)
+	for i := 1; i < len(nodes); i++ {
+		edges = append(edges, WorkflowEdge{
+			FromNode:  nodes[i-1].NodeKey,
+			ToNode:    nodes[i].NodeKey,
+			Condition: NodeStateSuccess,
+		})
+	}
+	return edges
+}
+
+func hasNodeKey(nodes []WorkflowNode, key string) bool {
+	return workflowNodeIndex(nodes, key) >= 0
+}
+
+func workflowNodeIndex(nodes []WorkflowNode, key string) int {
+	for i, node := range nodes {
+		if node.NodeKey == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func nextWorkflowStepKey(nodes []WorkflowNode) string {
+	for i := len(nodes) + 1; ; i++ {
+		key := fmt.Sprintf("step-%d", i)
+		if !hasNodeKey(nodes, key) {
+			return key
+		}
+	}
+}
+
 func workflowConfigFrom(wf Workflow) workflowConfig {
 	steps := make([]string, 0, len(wf.Nodes))
+	typedSteps := make([]workflowStepConfig, 0, len(wf.Nodes))
 	for _, node := range wf.Nodes {
-		command := strings.TrimSpace(node.Command)
-		if command == "" {
-			continue
-		}
+		step := workflowStepConfigFromNode(node)
+		typedSteps = append(typedSteps, step)
+		command := strings.TrimSpace(step.Summary)
 		if name := strings.TrimSpace(node.Name); name != "" {
 			steps = append(steps, name+" | "+command)
 			continue
@@ -397,7 +682,8 @@ func workflowConfigFrom(wf Workflow) workflowConfig {
 		Name:       wf.Name,
 		Enabled:    wf.Enabled,
 		Steps:      strings.Join(steps, "\n"),
-		StepsCount: len(steps),
+		TypedSteps: typedSteps,
+		StepsCount: len(typedSteps),
 		UpdatedAt:  wf.UpdatedAt,
 	}
 }
@@ -474,8 +760,8 @@ func validateWorkflow(wf *Workflow) map[string]string {
 	return fieldErrs
 }
 
-// validateWorkflowNodes checks node-key uniqueness/non-emptiness and that every
-// command-type node carries a command. It returns "" when the nodes are valid.
+// validateWorkflowNodes checks node-key uniqueness/non-emptiness and validates
+// each typed action's required fields. It returns "" when the nodes are valid.
 func validateWorkflowNodes(nodes []WorkflowNode) string {
 	seen := make(map[string]struct{}, len(nodes))
 	for i := range nodes {
@@ -488,12 +774,9 @@ func validateWorkflowNodes(nodes []WorkflowNode) string {
 		}
 		seen[key] = struct{}{}
 
-		nodeType := nodes[i].Type
-		if nodeType == "" {
-			nodeType = "command"
-		}
-		if nodeType == "command" && strings.TrimSpace(nodes[i].Command) == "" {
-			return fmt.Sprintf("node %q requires a command", key)
+		nodes[i].Type = normalizeActionType(nodes[i].Type)
+		if err := validateWorkflowNode(nodes[i]); err != nil {
+			return err.Error()
 		}
 	}
 	return ""
@@ -749,6 +1032,17 @@ func parsePathID(w http.ResponseWriter, r *http.Request, prefix string) (int64, 
 		return 0, false
 	}
 	return id, true
+}
+
+func parseWorkflowConfigPath(w http.ResponseWriter, r *http.Request) (id int64, suffix string, ok bool) {
+	raw := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/workflow-config/"), "/")
+	idPart, rest, _ := strings.Cut(raw, "/")
+	id, err := strconv.ParseInt(idPart, 10, 64)
+	if err != nil || id <= 0 {
+		writeAPIError(w, http.StatusBadRequest, map[string]string{"id": "invalid id"})
+		return 0, "", false
+	}
+	return id, strings.Trim(rest, "/"), true
 }
 
 // ── Live WebSocket stream ────────────────────────────────────────────────────

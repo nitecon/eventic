@@ -2,7 +2,7 @@
 
 Eventic is a per-repo workflow engine. When an event arrives (a GitHub webhook
 or a `comms` message), the client resolves **one** workflow for the event,
-checks out the branch, and executes the workflow's **DAG** of CLI-command nodes,
+checks out the branch, and executes the workflow's **DAG** of typed action nodes,
 passing output and context between them.
 
 Workflows live in the client's SQLite database and are authored through the
@@ -13,7 +13,8 @@ config file — `.eventic.yaml` and `.deploy/deploy.yml` are no longer read.
 
 A workflow is bound to one `(scope, repo, event_type)` slot and contains:
 
-- **Nodes** — each runs a single command via `sh -c`.
+- **Nodes** — each performs one typed action, such as running a command, sending
+  an HTTP request, sending a project message, or triggering an event on a project.
 - **Edges** — directed, optionally-conditional links between nodes.
 
 ### Node fields
@@ -22,13 +23,38 @@ A workflow is bound to one `(scope, repo, event_type)` slot and contains:
 |---|---|
 | `node_key` | Stable identifier referenced by edges (unique within the workflow) |
 | `name` | Human-readable label |
-| `type` | `command` (the only type in v1) |
-| `command` | Shell command executed via `sh -c` |
+| `type` | `run_command`, `send_http_request`, `send_project_message`, or `trigger_project_event` (`command` is accepted as a legacy alias for `run_command`) |
+| `command` | Shell command executed via `sh -c` for `run_command` nodes |
 | `capture` | When set, the node's trimmed stdout is stored under this variable name and exported to downstream nodes as `NAME=value` |
 | `continue_on_error` | When `true`, a failure here does not fail the overall run and downstream `success` edges still see the node as failed |
 | `timeout_seconds` | Per-node timeout (0 = no explicit timeout) |
 | `pos_x` / `pos_y` | Editor canvas coordinates (UI only) |
-| `config` | Free-form JSON for future node types |
+| `config` | Typed action JSON: HTTP request settings, project message/event settings, status/exit-code evaluation, response handling, and post actions |
+
+### Typed actions
+
+Each node first evaluates action success before response handling:
+
+| Action | Required fields | Success check |
+|---|---|---|
+| `run_command` | `command` | `result.success_exit_codes` (default `0`) |
+| `send_http_request` | `config.http_request.method`, `url`, optional headers/body | `result.success_statuses` (default `200-299`) |
+| `send_project_message` | `config.project_message.repo`, `message` | local dispatch accepted |
+| `trigger_project_event` | `config.project_event.repo`, `event_type` | local dispatch accepted |
+
+Response handling is configured under `config.response`:
+
+| Mode | Behavior |
+|---|---|
+| `noop` | Leaves the action output/body as the node output |
+| `send_data` | Selects one value using dot notation (for example `body.token`) and returns or sends that value |
+| `iterate_data` | Selects a JSON array using dot notation (for example `body.items`) and iterates each item |
+
+`config.post_actions` can run follow-up typed actions after the primary action
+succeeds. With `send_data`, a post action sees `${EVENTIC_RESPONSE_DATA}`. With
+`iterate_data`, post actions run once per item and see `${EVENTIC_ITEM}` plus
+`${EVENTIC_ITEM_INDEX}`. Post actions use the same typed action names and
+status/exit matcher rules as primary nodes.
 
 ### Edge conditions
 
@@ -67,6 +93,9 @@ Every node command receives the process environment plus:
 | `EVENTIC_CONTEXT_DIR` | Per-run scratch directory shared by all nodes in the run |
 | `EVENTIC_PR_NUMBER` | PR number (0 if not a PR event) |
 | `EVENTIC_DELIVERY_ID` | Delivery ID for tracing |
+| `EVENTIC_RESPONSE_DATA` | Selected response data while a post action is running |
+| `EVENTIC_ITEM` | Current iterated item while an `iterate_data` post action is running |
+| `EVENTIC_ITEM_INDEX` | Current zero-based item index while an `iterate_data` post action is running |
 | `<captured vars>` | Each upstream `capture` exported as `NAME=value` |
 
 Use `EVENTIC_CONTEXT_DIR` to hand large artifacts (fetched documents, generated
@@ -111,26 +140,26 @@ conditionally files an issue:
     {
       "node_key": "rag",
       "name": "RAG fetch",
-      "type": "command",
+      "type": "run_command",
       "command": "rag-fetch --repo \"$EVENTIC_REPO\" --query \"$EVENTIC_MESSAGE\" > \"$EVENTIC_CONTEXT_DIR/context.md\""
     },
     {
       "node_key": "memory",
       "name": "Capture memory",
-      "type": "command",
+      "type": "run_command",
       "command": "memory context \"$EVENTIC_MESSAGE\" -k 10 >> \"$EVENTIC_CONTEXT_DIR/context.md\""
     },
     {
       "node_key": "assess",
       "name": "Gemini threat assess",
-      "type": "command",
+      "type": "run_command",
       "capture": "VERDICT",
       "command": "gemini -p \"Using $EVENTIC_CONTEXT_DIR/context.md, classify supply-chain risk. Reply with exactly one word: benign or risky.\""
     },
     {
       "node_key": "ticket",
       "name": "Open issue",
-      "type": "command",
+      "type": "run_command",
       "command": "gh issue create -R \"$EVENTIC_REPO\" -t \"Threat review: $EVENTIC_MESSAGE\" -F \"$EVENTIC_CONTEXT_DIR/context.md\""
     }
   ],

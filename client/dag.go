@@ -20,10 +20,12 @@ const (
 type DAGStep struct {
 	Key             string        // unique node key within the graph
 	Name            string        // human-readable label
-	Command         string        // shell command executed by the NodeRunner
+	Type            string        // typed action executed by the NodeRunner
+	Command         string        // shell command for run_command nodes
 	Capture         string        // when non-empty, the var name to store trimmed stdout under
 	ContinueOnError bool          // a failure here does not fail the overall run
 	Timeout         time.Duration // per-node timeout; 0 means no timeout
+	Config          string        // action-specific JSON configuration
 }
 
 // DAGEdge is a directed, optionally-conditional link from one node to another.
@@ -83,10 +85,12 @@ func BuildGraph(nodes []WorkflowNode, edges []WorkflowEdge) (Graph, error) {
 		g.Nodes[n.NodeKey] = DAGStep{
 			Key:             n.NodeKey,
 			Name:            n.Name,
+			Type:            normalizeActionType(n.Type),
 			Command:         n.Command,
 			Capture:         n.Capture,
 			ContinueOnError: n.ContinueOnError,
 			Timeout:         time.Duration(n.TimeoutSeconds) * time.Second,
+			Config:          n.Config,
 		}
 		g.Order = append(g.Order, n.NodeKey)
 	}

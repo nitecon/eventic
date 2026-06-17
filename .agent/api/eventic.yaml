@@ -44,14 +44,25 @@ content:
         - Create a workflow with `POST /api/workflow-config?scope=repo&repo={org}/{repo}`.
         - Update a workflow with `PUT /api/workflow-config/{id}`.
         - Delete a workflow with `DELETE /api/workflow-config/{id}`.
-        - The configuration form flattens command nodes into a newline-delimited `steps` field. Each line is either a shell command or `Display name | shell command`; Eventic converts those lines into sequential DAG nodes linked by success edges.
-        - "`event_type` accepts the same event/action keys used by the underlying workflow store, such as `push` or `pull_request.opened`."
+        - Append a typed step with `POST /api/workflow-config/{id}/steps`.
+        - Update a typed step with `PUT /api/workflow-config/{id}/steps/{node_key}`.
+        - Delete a typed step with `DELETE /api/workflow-config/{id}/steps/{node_key}`; the configuration endpoint maintains a simple success-edge chain for this editor path.
+        - "`event_type` is selected from `GET /api/event-types` values, such as `push`, `pull_request.opened`, or `comms`."
+        - The compatibility API still accepts a newline-delimited `steps` field where each line is either a shell command or `Display name | shell command`; those lines become sequential `run_command` nodes linked by success edges.
+        - The typed config path accepts either `typed_steps` or a flat initial step on create. Supported `action_type` values are `run_command`, `send_http_request`, `send_project_message`, and `trigger_project_event`.
+        - HTTP steps use `http_method`, `http_url`, optional `http_headers`, optional `http_body`, and `result_statuses` (for example `200-299`).
+        - Command steps use `command` and `result_exit_codes` (for example `0`).
+        - Project message/event steps use `project_repo`, optional `project_ref`, `project_message`, and for trigger-event steps `project_event_type`.
+        - Response handling uses `response_mode` (`noop`, `send_data`, `iterate_data`), optional dot-notation `response_path` (for example `body.items.0.name`), and `response_capture` when data should be stored for downstream conditions/steps.
+        - Steps can define durable `post_actions` in `workflow_nodes.config`. The editor exposes the first post action through `post_action_type`, `post_command`, `post_http_*`, `post_project_*`, `post_result_*`, `post_continue_on_error`, and `post_timeout_seconds` fields.
+        - For `send_data`, post actions run once with `${EVENTIC_RESPONSE_DATA}` set to the selected response data. For `iterate_data`, post actions run once per selected array item with `${EVENTIC_ITEM}` and `${EVENTIC_ITEM_INDEX}` set.
+        - Post action types use the same typed action names as primary steps and are evaluated with the same status/exit matcher rules before the parent step is considered successful.
     - name: Configure global workflows
       steps:
         - Open `GET /global` for all-repository workflow defaults.
         - Existing workflows are loaded from `GET /api/workflow-config?scope=global`.
         - Create global workflows with `POST /api/workflow-config?scope=global`.
-        - Global workflow forms use the same `name`, `event_type`, and newline-delimited `steps` contract as repository workflows.
+        - Global workflow forms use the same selected `event_type`, typed step, result evaluation, and response handling contract as repository workflows.
         - Runtime workflow resolution still prefers repo/action, then repo/event, then global/action, then global/event.
     - name: Use project and workflow APIs
       steps:

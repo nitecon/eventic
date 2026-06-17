@@ -265,7 +265,10 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		return
 	}
 
-	state, desc = runEventWorkflow(ctx, cfg, event, dispatch, webLog, projectStore)
+	replay := func(replayCtx context.Context, replayEvent protocol.EventMsg) {
+		go processEvent(replayCtx, nil, cfg, replayEvent, workerSem, dispatch, approvalStore, webLog, projectStore)
+	}
+	state, desc = runEventWorkflow(ctx, cfg, event, dispatch, webLog, projectStore, replay)
 
 	writeStatus(ctx, conn, protocol.StatusMsg{
 		MsgType:     "Status",
@@ -315,7 +318,7 @@ func sendNotification(ctx context.Context, dispatch *notifier.Dispatcher, hookNa
 // executes the resolved DAG. It returns the overall terminal state ("success",
 // "failure", or "skipped") and a human-readable description. It never panics on
 // a missing workflow — that is a benign "skipped" outcome.
-func runEventWorkflow(ctx context.Context, cfg Config, event protocol.EventMsg, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore) (state, desc string) {
+func runEventWorkflow(ctx context.Context, cfg Config, event protocol.EventMsg, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore, replay ReplayDispatcher) (state, desc string) {
 	wf, err := projectStore.ResolveWorkflow(ctx, event.Repo, event.GitHubEvent, event.Action)
 	if err != nil {
 		log.Error().Err(err).Str("repo", event.Repo).Str("event", eventLabel(event)).Msg("workflow resolution failed")
@@ -352,14 +355,14 @@ func runEventWorkflow(ctx context.Context, cfg Config, event protocol.EventMsg, 
 		return "failure", err.Error()
 	}
 
-	return executeWorkflowGraph(ctx, cfg, event, wf, graph, repoPath, currentRef, currentHash, dispatch, webLog, projectStore)
+	return executeWorkflowGraph(ctx, cfg, event, wf, graph, repoPath, currentRef, currentHash, dispatch, webLog, projectStore, replay)
 }
 
 // executeWorkflowGraph starts a workflow run, executes the DAG, and folds the
 // per-node results into the overall run state. It drives both the persisted run
 // records and the live web execution log, and dispatches a run-completion
 // notification honoring the configured notify_on filter.
-func executeWorkflowGraph(ctx context.Context, cfg Config, event protocol.EventMsg, wf *Workflow, graph Graph, repoPath, ref, hash string, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore) (state, desc string) {
+func executeWorkflowGraph(ctx context.Context, cfg Config, event protocol.EventMsg, wf *Workflow, graph Graph, repoPath, ref, hash string, dispatch *notifier.Dispatcher, webLog *ExecutionLog, projectStore *ProjectStore, replay ReplayDispatcher) (state, desc string) {
 	runID, err := projectStore.StartRun(ctx, &WorkflowRun{
 		WorkflowID: wf.ID,
 		Repo:       event.Repo,
@@ -394,7 +397,7 @@ func executeWorkflowGraph(ctx context.Context, cfg Config, event protocol.EventM
 
 	// Wrap the real runner so each node also drives the run records and the
 	// live web execution log (node_key as the hook name) for SSE streaming.
-	runner := newNodeRunner(repoPath, event)
+	runner := newNodeRunner(repoPath, event, replay)
 	tracked := func(nodeCtx context.Context, step DAGStep, runCtx *RunContext) NodeResult {
 		projectStore.StartRunNode(ctx, runID, step.Key)
 		webLog.StartHook(event.DeliveryID, step.Key)

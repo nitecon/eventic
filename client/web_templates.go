@@ -50,15 +50,20 @@ type dashboardView struct {
 }
 
 type configurationView struct {
-	Brand     string
-	Title     string
-	Scope     string
-	Repo      string
-	Owner     string
-	Name      string
-	IsGlobal  bool
-	Project   *ProjectState
-	Workflows []workflowConfig
+	Brand       string
+	Title       string
+	Scope       string
+	Repo        string
+	Owner       string
+	Name        string
+	IsGlobal    bool
+	Project     *ProjectState
+	Workflows   []workflowConfig
+	Events      []selectOption
+	Actions     []selectOption
+	PostActions []selectOption
+	Responses   []selectOption
+	Methods     []selectOption
 }
 
 // indexHandler serves the dashboard at "/". When StaticDir contains an
@@ -129,10 +134,15 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 	}
 
 	view := configurationView{
-		Brand:    "Eventic",
-		Scope:    scope,
-		Repo:     repo,
-		IsGlobal: scope == WorkflowScopeGlobal,
+		Brand:       "Eventic",
+		Scope:       scope,
+		Repo:        repo,
+		IsGlobal:    scope == WorkflowScopeGlobal,
+		Events:      workflowEventOptions(),
+		Actions:     workflowActionOptions(),
+		PostActions: workflowPostActionOptions(),
+		Responses:   workflowResponseOptions(),
+		Methods:     workflowHTTPMethodOptions(),
 	}
 	if view.IsGlobal {
 		view.Title = "Global Workflows"

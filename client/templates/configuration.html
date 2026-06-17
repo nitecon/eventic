@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Eventic — [[ .Title ]]</title>
+  <title>Eventic - [[ .Title ]]</title>
   <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.css">
   <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css" class="theme" data-theme="light">
   <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
@@ -76,69 +76,560 @@
           <header class="nd-panel-header">
             <h2>New Workflow</h2>
           </header>
-          <article class="nd-card">
-            <div class="nd-card-body">
-              <form data-nd-action="POST /api/workflow-config?scope=[[ .Scope ]][[ if .Repo ]]&amp;repo=[[ .Repo ]][[ end ]]"
-                    data-nd-success="reset, refresh:#workflow-list, toast:Workflow saved">
-                <div class="nd-form-group">
-                  <label for="workflow-name">Name</label>
-                  <input id="workflow-name" name="name" required>
-                  <div class="nd-form-error"></div>
-                </div>
-                <div class="nd-form-group">
-                  <label for="workflow-event">Event</label>
-                  <input id="workflow-event" name="event_type" required>
-                  <div class="nd-form-error"></div>
-                </div>
-                <div class="nd-form-group">
-                  <label for="workflow-steps">Steps</label>
-                  <textarea id="workflow-steps" name="steps" rows="8" required></textarea>
-                  <div class="nd-form-error"></div>
-                </div>
-                <button type="submit" class="nd-btn-primary">Save Workflow</button>
-              </form>
+          <form data-eventic-action="POST /api/workflow-config?scope=[[ .Scope ]][[ if .Repo ]]&amp;repo=[[ .Repo ]][[ end ]]">
+            <div class="nd-grid nd-grid-2">
+              <div class="nd-form-group">
+                <label for="workflow-name">Name</label>
+                <input id="workflow-name" name="name" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-event">Event</label>
+                <select id="workflow-event" name="event_type" required>
+                  [[ range .Events ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-step-name">Step Name</label>
+                <input id="workflow-step-name" name="step_name" required>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-action-type">Action Type</label>
+                <select id="workflow-action-type" name="action_type" required>
+                  [[ range .Actions ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-command">Command</label>
+                <input id="workflow-command" name="command">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-http-method">HTTP Method</label>
+                <select id="workflow-http-method" name="http_method">
+                  [[ range .Methods ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-http-url">HTTP URL</label>
+                <input id="workflow-http-url" name="http_url" type="url">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-project-repo">Project Repo</label>
+                <input id="workflow-project-repo" name="project_repo" value="[[ .Repo ]]">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-project-event">Project Event</label>
+                <select id="workflow-project-event" name="project_event_type">
+                  [[ range .Events ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-project-ref">Project Ref</label>
+                <input id="workflow-project-ref" name="project_ref">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-result-statuses">Success Status</label>
+                <input id="workflow-result-statuses" name="result_statuses" value="200-299">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-result-exit-codes">Success Exit</label>
+                <input id="workflow-result-exit-codes" name="result_exit_codes" value="0">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-response-mode">Response Mode</label>
+                <select id="workflow-response-mode" name="response_mode">
+                  [[ range .Responses ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-response-path">Response Path</label>
+                <input id="workflow-response-path" name="response_path">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-response-capture">Capture Variable</label>
+                <input id="workflow-response-capture" name="response_capture">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-action-type">Post Action</label>
+                <select id="workflow-post-action-type" name="post_action_type">
+                  [[ range .PostActions ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-action-name">Post Action Name</label>
+                <input id="workflow-post-action-name" name="post_action_name">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-command">Post Command</label>
+                <input id="workflow-post-command" name="post_command">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-http-method">Post HTTP Method</label>
+                <select id="workflow-post-http-method" name="post_http_method">
+                  [[ range .Methods ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-http-url">Post HTTP URL</label>
+                <input id="workflow-post-http-url" name="post_http_url" type="url">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-project-repo">Post Project Repo</label>
+                <input id="workflow-post-project-repo" name="post_project_repo" value="[[ .Repo ]]">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-project-event">Post Project Event</label>
+                <select id="workflow-post-project-event" name="post_project_event_type">
+                  [[ range .Events ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
+                  [[ end ]]
+                </select>
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-project-ref">Post Project Ref</label>
+                <input id="workflow-post-project-ref" name="post_project_ref">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-result-statuses">Post Success Status</label>
+                <input id="workflow-post-result-statuses" name="post_result_statuses" value="200-299">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-result-exit-codes">Post Success Exit</label>
+                <input id="workflow-post-result-exit-codes" name="post_result_exit_codes" value="0">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-timeout">Timeout Seconds</label>
+                <input id="workflow-timeout" name="timeout_seconds" type="number" min="0">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-post-timeout">Post Timeout Seconds</label>
+                <input id="workflow-post-timeout" name="post_timeout_seconds" type="number" min="0">
+              </div>
             </div>
-          </article>
+            <div class="nd-form-group">
+              <label for="workflow-http-headers">HTTP Headers</label>
+              <textarea id="workflow-http-headers" name="http_headers" rows="3"></textarea>
+            </div>
+            <div class="nd-form-group">
+              <label for="workflow-http-body">HTTP Body</label>
+              <textarea id="workflow-http-body" name="http_body" rows="4"></textarea>
+            </div>
+            <div class="nd-form-group">
+              <label for="workflow-project-message">Project Message</label>
+              <textarea id="workflow-project-message" name="project_message" rows="4"></textarea>
+            </div>
+            <div class="nd-form-group">
+              <label for="workflow-post-http-headers">Post HTTP Headers</label>
+              <textarea id="workflow-post-http-headers" name="post_http_headers" rows="3"></textarea>
+            </div>
+            <div class="nd-form-group">
+              <label for="workflow-post-http-body">Post HTTP Body</label>
+              <textarea id="workflow-post-http-body" name="post_http_body" rows="4"></textarea>
+            </div>
+            <div class="nd-form-group">
+              <label for="workflow-post-project-message">Post Project Message</label>
+              <textarea id="workflow-post-project-message" name="post_project_message" rows="4"></textarea>
+            </div>
+            <label class="nd-checkbox">
+              <input type="checkbox" name="continue_on_error">
+              <span>Continue On Error</span>
+            </label>
+            <label class="nd-checkbox">
+              <input type="checkbox" name="post_continue_on_error">
+              <span>Post Action Continue On Error</span>
+            </label>
+            <button type="submit" class="nd-btn-primary">Save Workflow</button>
+          </form>
         </section>
 
         <section class="nd-panel" id="workflow-configuration">
           <header class="nd-panel-header">
             <h2>Configured Workflows</h2>
           </header>
-          <div id="workflow-list"
-               data-nd-bind="/api/workflow-config?scope=[[ .Scope ]][[ if .Repo ]]&amp;repo=[[ .Repo ]][[ end ]]"
-               data-nd-template="workflow-config-row-tmpl">
+          <div id="workflow-list">
             [[ range .Workflows ]]
+            [[ $workflow := . ]]
             <article class="nd-card">
               <header class="nd-card-header">
                 <h3 class="nd-card-title">[[ .Name ]]</h3>
                 <span class="nd-badge nd-badge-info">[[ .EventType ]]</span>
               </header>
               <div class="nd-card-body">
-                <form data-nd-action="PUT /api/workflow-config/[[ .ID ]]"
-                      data-nd-success="refresh:#workflow-list, toast:Workflow updated">
-                  <div class="nd-form-group">
-                    <label for="workflow-name-[[ .ID ]]">Name</label>
-                    <input id="workflow-name-[[ .ID ]]" name="name" value="[[ .Name ]]" required>
-                    <div class="nd-form-error"></div>
+                <form data-eventic-action="PUT /api/workflow-config/[[ .ID ]]">
+                  <div class="nd-grid nd-grid-2">
+                    <div class="nd-form-group">
+                      <label for="workflow-name-[[ .ID ]]">Name</label>
+                      <input id="workflow-name-[[ .ID ]]" name="name" value="[[ .Name ]]" required>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="workflow-event-[[ .ID ]]">Event</label>
+                      <select id="workflow-event-[[ .ID ]]" name="event_type" required>
+                        [[ range $.Events ]]
+                        <option value="[[ .Value ]]" [[ if eq .Value $workflow.EventType ]]selected[[ end ]]>[[ .Label ]]</option>
+                        [[ end ]]
+                      </select>
+                    </div>
                   </div>
-                  <div class="nd-form-group">
-                    <label for="workflow-event-[[ .ID ]]">Event</label>
-                    <input id="workflow-event-[[ .ID ]]" name="event_type" value="[[ .EventType ]]" required>
-                    <div class="nd-form-error"></div>
-                  </div>
-                  <div class="nd-form-group">
-                    <label for="workflow-steps-[[ .ID ]]">Steps</label>
-                    <textarea id="workflow-steps-[[ .ID ]]" name="steps" rows="8" required>[[ .Steps ]]</textarea>
-                    <div class="nd-form-error"></div>
-                  </div>
-                  <button type="submit" class="nd-btn-primary">Update</button>
+                  <button type="submit" class="nd-btn-primary">Update Workflow</button>
                   <button type="button"
                           class="nd-btn-danger"
-                          data-nd-action="DELETE /api/workflow-config/[[ .ID ]]"
-                          data-nd-confirm="Delete this workflow?"
-                          data-nd-success="refresh:#workflow-list, toast:Workflow deleted">Delete</button>
+                          data-eventic-delete="DELETE /api/workflow-config/[[ .ID ]]">Delete Workflow</button>
                 </form>
+
+                <section class="nd-panel">
+                  <header class="nd-panel-header">
+                    <h4>Steps</h4>
+                  </header>
+                  [[ range .TypedSteps ]]
+                  [[ $step := . ]]
+                  <form data-eventic-action="PUT /api/workflow-config/[[ $workflow.ID ]]/steps/[[ .NodeKey ]]">
+                    <div class="nd-grid nd-grid-2">
+                      <div class="nd-form-group">
+                        <label for="step-name-[[ $workflow.ID ]]-[[ .NodeKey ]]">Step Name</label>
+                        <input id="step-name-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="name" value="[[ .Name ]]" required>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-type-[[ $workflow.ID ]]-[[ .NodeKey ]]">Action Type</label>
+                        <select id="step-type-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="action_type" required>
+                          [[ range $.Actions ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.Type ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-command-[[ $workflow.ID ]]-[[ .NodeKey ]]">Command</label>
+                        <input id="step-command-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="command" value="[[ .Command ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-http-method-[[ $workflow.ID ]]-[[ .NodeKey ]]">HTTP Method</label>
+                        <select id="step-http-method-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="http_method">
+                          [[ range $.Methods ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.HTTPMethod ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-http-url-[[ $workflow.ID ]]-[[ .NodeKey ]]">HTTP URL</label>
+                        <input id="step-http-url-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="http_url" value="[[ .HTTPURL ]]" type="url">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-project-repo-[[ $workflow.ID ]]-[[ .NodeKey ]]">Project Repo</label>
+                        <input id="step-project-repo-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="project_repo" value="[[ .ProjectRepo ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-project-event-[[ $workflow.ID ]]-[[ .NodeKey ]]">Project Event</label>
+                        <select id="step-project-event-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="project_event_type">
+                          [[ range $.Events ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.ProjectEvent ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-project-ref-[[ $workflow.ID ]]-[[ .NodeKey ]]">Project Ref</label>
+                        <input id="step-project-ref-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="project_ref" value="[[ .ProjectRef ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-result-statuses-[[ $workflow.ID ]]-[[ .NodeKey ]]">Success Status</label>
+                        <input id="step-result-statuses-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="result_statuses" value="[[ .ResultStatuses ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-result-exit-codes-[[ $workflow.ID ]]-[[ .NodeKey ]]">Success Exit</label>
+                        <input id="step-result-exit-codes-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="result_exit_codes" value="[[ .ResultExitCodes ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-response-mode-[[ $workflow.ID ]]-[[ .NodeKey ]]">Response Mode</label>
+                        <select id="step-response-mode-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="response_mode">
+                          [[ range $.Responses ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.ResponseMode ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-response-path-[[ $workflow.ID ]]-[[ .NodeKey ]]">Response Path</label>
+                        <input id="step-response-path-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="response_path" value="[[ .ResponsePath ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-response-capture-[[ $workflow.ID ]]-[[ .NodeKey ]]">Capture Variable</label>
+                        <input id="step-response-capture-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="response_capture" value="[[ .ResponseCapture ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-action-type-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Action</label>
+                        <select id="step-post-action-type-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_action_type">
+                          [[ range $.PostActions ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.PostActionType ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-action-name-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Action Name</label>
+                        <input id="step-post-action-name-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_action_name" value="[[ .PostActionName ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-command-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Command</label>
+                        <input id="step-post-command-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_command" value="[[ .PostCommand ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-http-method-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post HTTP Method</label>
+                        <select id="step-post-http-method-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_http_method">
+                          [[ range $.Methods ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.PostHTTPMethod ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-http-url-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post HTTP URL</label>
+                        <input id="step-post-http-url-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_http_url" value="[[ .PostHTTPURL ]]" type="url">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-project-repo-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Project Repo</label>
+                        <input id="step-post-project-repo-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_project_repo" value="[[ .PostProjectRepo ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-project-event-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Project Event</label>
+                        <select id="step-post-project-event-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_project_event_type">
+                          [[ range $.Events ]]
+                          <option value="[[ .Value ]]" [[ if eq .Value $step.PostProjectEvent ]]selected[[ end ]]>[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-project-ref-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Project Ref</label>
+                        <input id="step-post-project-ref-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_project_ref" value="[[ .PostProjectRef ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-result-statuses-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Success Status</label>
+                        <input id="step-post-result-statuses-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_result_statuses" value="[[ .PostResultStatuses ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-result-exit-codes-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Success Exit</label>
+                        <input id="step-post-result-exit-codes-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_result_exit_codes" value="[[ .PostResultExitCodes ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]">Timeout Seconds</label>
+                        <input id="step-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="timeout_seconds" value="[[ .TimeoutSeconds ]]" type="number" min="0">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-post-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Timeout Seconds</label>
+                        <input id="step-post-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_timeout_seconds" value="[[ .PostTimeoutSeconds ]]" type="number" min="0">
+                      </div>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-http-headers-[[ $workflow.ID ]]-[[ .NodeKey ]]">HTTP Headers</label>
+                      <textarea id="step-http-headers-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="http_headers" rows="3">[[ .HTTPHeaders ]]</textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-http-body-[[ $workflow.ID ]]-[[ .NodeKey ]]">HTTP Body</label>
+                      <textarea id="step-http-body-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="http_body" rows="4">[[ .HTTPBody ]]</textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-project-message-[[ $workflow.ID ]]-[[ .NodeKey ]]">Project Message</label>
+                      <textarea id="step-project-message-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="project_message" rows="4">[[ .ProjectMessage ]]</textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-post-http-headers-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post HTTP Headers</label>
+                      <textarea id="step-post-http-headers-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_http_headers" rows="3">[[ .PostHTTPHeaders ]]</textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-post-http-body-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post HTTP Body</label>
+                      <textarea id="step-post-http-body-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_http_body" rows="4">[[ .PostHTTPBody ]]</textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-post-project-message-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Project Message</label>
+                      <textarea id="step-post-project-message-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_project_message" rows="4">[[ .PostProjectMsg ]]</textarea>
+                    </div>
+                    <label class="nd-checkbox">
+                      <input type="checkbox" name="continue_on_error" [[ if .ContinueOnError ]]checked[[ end ]]>
+                      <span>Continue On Error</span>
+                    </label>
+                    <label class="nd-checkbox">
+                      <input type="checkbox" name="post_continue_on_error" [[ if .PostContinueOnError ]]checked[[ end ]]>
+                      <span>Post Action Continue On Error</span>
+                    </label>
+                    <button type="submit" class="nd-btn-primary">Update Step</button>
+                    <button type="button"
+                            class="nd-btn-danger"
+                            data-eventic-delete="DELETE /api/workflow-config/[[ $workflow.ID ]]/steps/[[ .NodeKey ]]">Delete Step</button>
+                  </form>
+                  [[ end ]]
+                  <form data-eventic-action="POST /api/workflow-config/[[ .ID ]]/steps">
+                    <div class="nd-grid nd-grid-2">
+                      <div class="nd-form-group">
+                        <label for="append-step-name-[[ .ID ]]">Step Name</label>
+                        <input id="append-step-name-[[ .ID ]]" name="name" required>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-action-[[ .ID ]]">Action Type</label>
+                        <select id="append-step-action-[[ .ID ]]" name="action_type" required>
+                          [[ range $.Actions ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-command-[[ .ID ]]">Command</label>
+                        <input id="append-step-command-[[ .ID ]]" name="command">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-http-method-[[ .ID ]]">HTTP Method</label>
+                        <select id="append-step-http-method-[[ .ID ]]" name="http_method">
+                          [[ range $.Methods ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-http-url-[[ .ID ]]">HTTP URL</label>
+                        <input id="append-step-http-url-[[ .ID ]]" name="http_url" type="url">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-project-repo-[[ .ID ]]">Project Repo</label>
+                        <input id="append-step-project-repo-[[ .ID ]]" name="project_repo" value="[[ $.Repo ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-project-event-[[ .ID ]]">Project Event</label>
+                        <select id="append-step-project-event-[[ .ID ]]" name="project_event_type">
+                          [[ range $.Events ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-project-ref-[[ .ID ]]">Project Ref</label>
+                        <input id="append-step-project-ref-[[ .ID ]]" name="project_ref">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-result-statuses-[[ .ID ]]">Success Status</label>
+                        <input id="append-step-result-statuses-[[ .ID ]]" name="result_statuses" value="200-299">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-result-exit-codes-[[ .ID ]]">Success Exit</label>
+                        <input id="append-step-result-exit-codes-[[ .ID ]]" name="result_exit_codes" value="0">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-response-mode-[[ .ID ]]">Response Mode</label>
+                        <select id="append-step-response-mode-[[ .ID ]]" name="response_mode">
+                          [[ range $.Responses ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-response-path-[[ .ID ]]">Response Path</label>
+                        <input id="append-step-response-path-[[ .ID ]]" name="response_path">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-response-capture-[[ .ID ]]">Capture Variable</label>
+                        <input id="append-step-response-capture-[[ .ID ]]" name="response_capture">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-action-type-[[ .ID ]]">Post Action</label>
+                        <select id="append-step-post-action-type-[[ .ID ]]" name="post_action_type">
+                          [[ range $.PostActions ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-action-name-[[ .ID ]]">Post Action Name</label>
+                        <input id="append-step-post-action-name-[[ .ID ]]" name="post_action_name">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-command-[[ .ID ]]">Post Command</label>
+                        <input id="append-step-post-command-[[ .ID ]]" name="post_command">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-http-method-[[ .ID ]]">Post HTTP Method</label>
+                        <select id="append-step-post-http-method-[[ .ID ]]" name="post_http_method">
+                          [[ range $.Methods ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-http-url-[[ .ID ]]">Post HTTP URL</label>
+                        <input id="append-step-post-http-url-[[ .ID ]]" name="post_http_url" type="url">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-project-repo-[[ .ID ]]">Post Project Repo</label>
+                        <input id="append-step-post-project-repo-[[ .ID ]]" name="post_project_repo" value="[[ $.Repo ]]">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-project-event-[[ .ID ]]">Post Project Event</label>
+                        <select id="append-step-post-project-event-[[ .ID ]]" name="post_project_event_type">
+                          [[ range $.Events ]]
+                          <option value="[[ .Value ]]">[[ .Label ]]</option>
+                          [[ end ]]
+                        </select>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-project-ref-[[ .ID ]]">Post Project Ref</label>
+                        <input id="append-step-post-project-ref-[[ .ID ]]" name="post_project_ref">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-result-statuses-[[ .ID ]]">Post Success Status</label>
+                        <input id="append-step-post-result-statuses-[[ .ID ]]" name="post_result_statuses" value="200-299">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-result-exit-codes-[[ .ID ]]">Post Success Exit</label>
+                        <input id="append-step-post-result-exit-codes-[[ .ID ]]" name="post_result_exit_codes" value="0">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-timeout-[[ .ID ]]">Timeout Seconds</label>
+                        <input id="append-step-timeout-[[ .ID ]]" name="timeout_seconds" type="number" min="0">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-post-timeout-[[ .ID ]]">Post Timeout Seconds</label>
+                        <input id="append-step-post-timeout-[[ .ID ]]" name="post_timeout_seconds" type="number" min="0">
+                      </div>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-http-headers-[[ .ID ]]">HTTP Headers</label>
+                      <textarea id="append-step-http-headers-[[ .ID ]]" name="http_headers" rows="3"></textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-http-body-[[ .ID ]]">HTTP Body</label>
+                      <textarea id="append-step-http-body-[[ .ID ]]" name="http_body" rows="4"></textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-project-message-[[ .ID ]]">Project Message</label>
+                      <textarea id="append-step-project-message-[[ .ID ]]" name="project_message" rows="4"></textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-post-http-headers-[[ .ID ]]">Post HTTP Headers</label>
+                      <textarea id="append-step-post-http-headers-[[ .ID ]]" name="post_http_headers" rows="3"></textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-post-http-body-[[ .ID ]]">Post HTTP Body</label>
+                      <textarea id="append-step-post-http-body-[[ .ID ]]" name="post_http_body" rows="4"></textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-post-project-message-[[ .ID ]]">Post Project Message</label>
+                      <textarea id="append-step-post-project-message-[[ .ID ]]" name="post_project_message" rows="4"></textarea>
+                    </div>
+                    <label class="nd-checkbox">
+                      <input type="checkbox" name="continue_on_error">
+                      <span>Continue On Error</span>
+                    </label>
+                    <label class="nd-checkbox">
+                      <input type="checkbox" name="post_continue_on_error">
+                      <span>Post Action Continue On Error</span>
+                    </label>
+                    <button type="submit" class="nd-btn-primary">Add Step</button>
+                  </form>
+                </section>
               </div>
               <footer class="nd-card-footer">
                 [[ .StepsCount ]] steps
@@ -147,48 +638,65 @@
             [[ end ]]
           </div>
         </section>
-
-        <template id="workflow-config-row-tmpl">
-          <article class="nd-card">
-            <header class="nd-card-header">
-              <h3 class="nd-card-title">{{name}}</h3>
-              <span class="nd-badge nd-badge-info">{{event_type}}</span>
-            </header>
-            <div class="nd-card-body">
-              <form data-nd-action="PUT /api/workflow-config/{{id}}"
-                    data-nd-success="refresh:#workflow-list, toast:Workflow updated">
-                <div class="nd-form-group">
-                  <label for="workflow-name-{{id}}">Name</label>
-                  <input id="workflow-name-{{id}}" name="name" value="{{name}}" required>
-                  <div class="nd-form-error"></div>
-                </div>
-                <div class="nd-form-group">
-                  <label for="workflow-event-{{id}}">Event</label>
-                  <input id="workflow-event-{{id}}" name="event_type" value="{{event_type}}" required>
-                  <div class="nd-form-error"></div>
-                </div>
-                <div class="nd-form-group">
-                  <label for="workflow-steps-{{id}}">Steps</label>
-                  <textarea id="workflow-steps-{{id}}" name="steps" rows="8" required>{{steps}}</textarea>
-                  <div class="nd-form-error"></div>
-                </div>
-                <button type="submit" class="nd-btn-primary">Update</button>
-                <button type="button"
-                        class="nd-btn-danger"
-                        data-nd-action="DELETE /api/workflow-config/{{id}}"
-                        data-nd-confirm="Delete this workflow?"
-                        data-nd-success="refresh:#workflow-list, toast:Workflow deleted">Delete</button>
-              </form>
-            </div>
-            <footer class="nd-card-footer">
-              {{steps_count}} steps
-            </footer>
-          </article>
-        </template>
       </main>
     </div>
   </div>
 
   <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.js"></script>
+  <script>
+    function eventicFormPayload(form) {
+      const payload = {};
+      for (const el of form.elements) {
+        if (!el.name || el.disabled) continue;
+        if (el.type === "checkbox") {
+          payload[el.name] = el.checked;
+          continue;
+        }
+        payload[el.name] = el.value;
+      }
+      return payload;
+    }
+
+    async function eventicRequest(action, payload) {
+      const [method, ...path] = action.split(" ");
+      const response = await fetch(path.join(" "), {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: payload === undefined ? undefined : JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        let message = response.statusText;
+        try {
+          const body = await response.json();
+          if (body.errors) message = Object.values(body.errors).join("\n");
+        } catch (_) {}
+        throw new Error(message);
+      }
+      return response;
+    }
+
+    document.addEventListener("submit", async (event) => {
+      const form = event.target.closest("form[data-eventic-action]");
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await eventicRequest(form.dataset.eventicAction, eventicFormPayload(form));
+        window.location.reload();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+
+    document.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-eventic-delete]");
+      if (!button) return;
+      try {
+        await eventicRequest(button.dataset.eventicDelete);
+        window.location.reload();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  </script>
 </body>
 </html>

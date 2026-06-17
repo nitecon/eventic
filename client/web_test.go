@@ -452,6 +452,109 @@ func TestWorkflowConfigLifecycle(t *testing.T) {
 	}
 }
 
+func TestWorkflowConfigTypedStepLifecycle(t *testing.T) {
+	store, err := OpenMemoryProjectStore(t.Context())
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
+	defer store.Close()
+
+	collection := workflowConfigCollectionHandler(store)
+	createBody := `{
+		"name":"notify",
+		"event_type":"push",
+		"step_name":"Fetch hook",
+		"action_type":"send_http_request",
+		"http_method":"POST",
+		"http_url":"https://example.test/hook",
+		"http_headers":"{\"X-Eventic\":\"yes\"}",
+		"http_body":"{\"ok\":true}",
+		"result_statuses":"200-202",
+		"response_mode":"send_data",
+		"response_path":"body.id",
+		"response_capture":"HOOK_ID",
+		"post_action_type":"send_project_message",
+		"post_project_repo":"nitecon/target",
+		"post_project_message":"Deploy ${HOOK_ID}"
+	}`
+	rec := httptest.NewRecorder()
+	collection.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workflow-config?scope=global", strings.NewReader(createBody)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create typed config: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created config: %v", err)
+	}
+	if created.StepsCount != 1 || created.TypedSteps[0].Type != WorkflowActionHTTPRequest || created.TypedSteps[0].PostActionType != WorkflowActionProjectMessage {
+		t.Fatalf("unexpected created typed config: %#v", created)
+	}
+
+	full, err := store.GetWorkflow(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("read workflow: %v", err)
+	}
+	if full.Nodes[0].Type != WorkflowActionHTTPRequest || full.Nodes[0].Capture != "HOOK_ID" {
+		t.Fatalf("unexpected persisted http node: %#v", full.Nodes[0])
+	}
+	if !strings.Contains(full.Nodes[0].Config, `"post_actions"`) {
+		t.Fatalf("expected post action config, got %s", full.Nodes[0].Config)
+	}
+
+	appendBody := `{
+		"name":"Notify project",
+		"action_type":"send_project_message",
+		"project_repo":"nitecon/another",
+		"project_message":"Deploy ${HOOK_ID}"
+	}`
+	stepPath := fmt.Sprintf("/api/workflow-config/%d/steps", created.ID)
+	rec = httptest.NewRecorder()
+	workflowConfigItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, stepPath, strings.NewReader(appendBody)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("append step: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var appended workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &appended); err != nil {
+		t.Fatalf("decode appended config: %v", err)
+	}
+	if appended.StepsCount != 2 || appended.TypedSteps[1].Type != WorkflowActionProjectMessage {
+		t.Fatalf("unexpected appended config: %#v", appended)
+	}
+
+	updateBody := `{
+		"name":"Trigger project",
+		"action_type":"trigger_project_event",
+		"project_repo":"nitecon/another",
+		"project_event_type":"workflow_dispatch",
+		"project_message":"Deploy ${HOOK_ID}"
+	}`
+	rec = httptest.NewRecorder()
+	workflowConfigItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, stepPath+"/step-2", strings.NewReader(updateBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update step: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var updated workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode updated config: %v", err)
+	}
+	if updated.TypedSteps[1].Type != WorkflowActionTriggerProjectEvent {
+		t.Fatalf("expected trigger event step, got %#v", updated.TypedSteps[1])
+	}
+
+	rec = httptest.NewRecorder()
+	workflowConfigItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, stepPath+"/step-2", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete step: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var deleted workflowConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &deleted); err != nil {
+		t.Fatalf("decode deleted config: %v", err)
+	}
+	if deleted.StepsCount != 1 {
+		t.Fatalf("expected one remaining step, got %#v", deleted)
+	}
+}
+
 func TestWorkflowCreateRejectsMissingName(t *testing.T) {
 	store, err := OpenMemoryProjectStore(t.Context())
 	if err != nil {

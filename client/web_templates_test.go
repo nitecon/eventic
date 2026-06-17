@@ -140,7 +140,7 @@ func TestDashboardTemplateStepNames(t *testing.T) {
 
 	body := rec.Body.String()
 
-	for _, stepName := range []string{"alpha-deploy", "Deploy | make deploy"} {
+	for _, stepName := range []string{"alpha-deploy", "Deploy", "make deploy", "Run Command"} {
 		if !strings.Contains(body, stepName) {
 			t.Errorf("expected workflow configuration text %q in rendered output", stepName)
 		}
@@ -205,9 +205,13 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 	for _, expected := range []string{
 		"Global Workflows",
 		"global-ci",
-		"Lint | make lint",
-		"Test | make test",
-		`data-nd-action="POST /api/workflow-config?scope=global"`,
+		"Lint",
+		"make lint",
+		"Test",
+		"make test",
+		`data-eventic-action="POST /api/workflow-config?scope=global"`,
+		`name="action_type"`,
+		`name="response_mode"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("expected global configuration page to contain %q", expected)

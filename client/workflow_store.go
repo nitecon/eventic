@@ -552,10 +552,7 @@ func (s *ProjectStore) withTx(ctx context.Context, fn func(tx *sql.Tx) error) er
 // existing transaction.
 func insertWorkflowGraph(ctx context.Context, tx *sql.Tx, workflowID int64, nodes []WorkflowNode, edges []WorkflowEdge) error {
 	for _, node := range nodes {
-		nodeType := node.Type
-		if nodeType == "" {
-			nodeType = "command"
-		}
+		nodeType := normalizeActionType(node.Type)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO workflow_nodes (
 				workflow_id, node_key, name, type, command, capture,
