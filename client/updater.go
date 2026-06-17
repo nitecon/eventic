@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,11 +65,8 @@ func checkAndUpdate(ctx context.Context) bool {
 		return false
 	}
 
-	latestClean := strings.TrimPrefix(latest, "v")
-	currentClean := strings.TrimPrefix(Version, "v")
-
-	if latestClean == currentClean {
-		log.Debug().Str("version", Version).Msg("already up to date")
+	if !shouldApplyRelease(Version, latest) {
+		log.Debug().Str("current", Version).Str("latest", latest).Msg("already up to date")
 		return false
 	}
 
@@ -109,6 +107,64 @@ func getLatestVersion(ctx context.Context) (string, error) {
 	}
 
 	return release.TagName, nil
+}
+
+func shouldApplyRelease(current, latest string) bool {
+	latestParts, latestOK := parseReleaseVersion(latest)
+	if !latestOK {
+		return false
+	}
+	currentParts, currentOK := parseReleaseVersion(current)
+	if !currentOK {
+		// Source builds and SHA-versioned builds should move to the latest
+		// published release when auto-update is enabled.
+		return true
+	}
+
+	maxParts := len(latestParts)
+	if len(currentParts) > maxParts {
+		maxParts = len(currentParts)
+	}
+	for i := range maxParts {
+		var currentPart, latestPart int
+		if i < len(currentParts) {
+			currentPart = currentParts[i]
+		}
+		if i < len(latestParts) {
+			latestPart = latestParts[i]
+		}
+		if latestPart > currentPart {
+			return true
+		}
+		if latestPart < currentPart {
+			return false
+		}
+	}
+	return false
+}
+
+func parseReleaseVersion(version string) ([]int, bool) {
+	clean := strings.TrimSpace(strings.TrimPrefix(version, "v"))
+	if cut := strings.IndexAny(clean, "-+"); cut >= 0 {
+		clean = clean[:cut]
+	}
+	if clean == "" {
+		return nil, false
+	}
+
+	segments := strings.Split(clean, ".")
+	parts := make([]int, 0, len(segments))
+	for _, segment := range segments {
+		if segment == "" {
+			return nil, false
+		}
+		part, err := strconv.Atoi(segment)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, part)
+	}
+	return parts, true
 }
 
 func applyUpdate(ctx context.Context, tag string) error {
