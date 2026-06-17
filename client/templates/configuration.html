@@ -123,6 +123,7 @@
           <a href="/global/events" [[ if eq .Page "stable-events" ]]class="nd-active"[[ end ]]>Stable Events</a>
           <a href="/global/mappings" [[ if eq .Page "visual-mappings" ]]class="nd-active"[[ end ]]>Visual Mapper</a>
           <a href="/global/mappings/advanced" [[ if eq .Page "advanced-mappings" ]]class="nd-active"[[ end ]]>Advanced Mappings</a>
+          <a href="/global/events/history" [[ if eq .Page "event-history" ]]class="nd-active"[[ end ]]>Event History</a>
         </nav>
 
         [[ if .ShowStablePage ]]
@@ -390,6 +391,56 @@
           [[ end ]]
         </section>
         [[ end ]]
+
+        [[ if .ShowHistory ]]
+        <section class="nd-panel" id="event-history">
+          <header class="nd-panel-header">
+            <h2>Event History</h2>
+          </header>
+          [[ if .InboundEvents ]]
+          <table class="nd-table-striped nd-table-hover">
+            <thead>
+              <tr>
+                <th>Repo</th>
+                <th>Provider</th>
+                <th>External</th>
+                <th>Stable Event</th>
+                <th>Mapping</th>
+                <th>State</th>
+                <th>Severity</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              [[ range .InboundEvents ]]
+              <tr>
+                <td>[[ .Repo ]]</td>
+                <td>[[ .Provider ]]</td>
+                <td>[[ .ExternalEvent ]][[ if .ExternalAction ]].[[ .ExternalAction ]][[ end ]]</td>
+                <td>[[ .StableEvent ]]</td>
+                <td>
+                  [[ if .MappingID ]]
+                  <span title="[[ .MappingName ]]">[[ .MappingStatus ]]</span>
+                  [[ else ]]
+                  [[ .MappingStatus ]]
+                  [[ end ]]
+                </td>
+                <td>[[ .State ]]</td>
+                <td>[[ .Severity ]]</td>
+                <td>
+                  <button type="button"
+                          class="nd-btn-secondary nd-btn-sm"
+                          data-eventic-replay="POST /api/events/[[ .ID ]]/replay">Replay</button>
+                </td>
+              </tr>
+              [[ end ]]
+            </tbody>
+          </table>
+          [[ else ]]
+          <p>No inbound events recorded yet.</p>
+          [[ end ]]
+        </section>
+        [[ end ]]
         [[ end ]]
 
         [[ if .ShowWorkflows ]]
@@ -526,6 +577,14 @@
               <div class="nd-form-group">
                 <label for="workflow-timeout">Timeout Seconds</label>
                 <input id="workflow-timeout" name="timeout_seconds" type="number" min="0">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-retry-attempts">Retry Attempts</label>
+                <input id="workflow-retry-attempts" name="retry_attempts" type="number" min="1" max="10" value="1">
+              </div>
+              <div class="nd-form-group">
+                <label for="workflow-retry-backoff">Retry Backoff Seconds</label>
+                <input id="workflow-retry-backoff" name="retry_backoff_seconds" type="number" min="0" max="3600">
               </div>
               <div class="nd-form-group">
                 <label for="workflow-post-timeout">Post Timeout Seconds</label>
@@ -729,6 +788,14 @@
                         <input id="step-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="timeout_seconds" value="[[ .TimeoutSeconds ]]" type="number" min="0">
                       </div>
                       <div class="nd-form-group">
+                        <label for="step-retry-attempts-[[ $workflow.ID ]]-[[ .NodeKey ]]">Retry Attempts</label>
+                        <input id="step-retry-attempts-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="retry_attempts" value="[[ .RetryAttempts ]]" type="number" min="1" max="10">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="step-retry-backoff-[[ $workflow.ID ]]-[[ .NodeKey ]]">Retry Backoff Seconds</label>
+                        <input id="step-retry-backoff-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="retry_backoff_seconds" value="[[ .RetryBackoffSeconds ]]" type="number" min="0" max="3600">
+                      </div>
+                      <div class="nd-form-group">
                         <label for="step-post-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Timeout Seconds</label>
                         <input id="step-post-timeout-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_timeout_seconds" value="[[ .PostTimeoutSeconds ]]" type="number" min="0">
                       </div>
@@ -890,6 +957,14 @@
                         <input id="append-step-timeout-[[ .ID ]]" name="timeout_seconds" type="number" min="0">
                       </div>
                       <div class="nd-form-group">
+                        <label for="append-step-retry-attempts-[[ .ID ]]">Retry Attempts</label>
+                        <input id="append-step-retry-attempts-[[ .ID ]]" name="retry_attempts" type="number" min="1" max="10" value="1">
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="append-step-retry-backoff-[[ .ID ]]">Retry Backoff Seconds</label>
+                        <input id="append-step-retry-backoff-[[ .ID ]]" name="retry_backoff_seconds" type="number" min="0" max="3600">
+                      </div>
+                      <div class="nd-form-group">
                         <label for="append-step-post-timeout-[[ .ID ]]">Post Timeout Seconds</label>
                         <input id="append-step-post-timeout-[[ .ID ]]" name="post_timeout_seconds" type="number" min="0">
                       </div>
@@ -945,10 +1020,10 @@
   <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.js"></script>
   <script>
     const eventicActionFields = {
-      run_command: ["command", "result_exit_codes", "timeout_seconds", "continue_on_error"],
-      send_http_request: ["http_method", "http_url", "http_headers", "http_body", "result_statuses", "timeout_seconds", "continue_on_error"],
-      send_project_message: ["project_repo", "project_ref", "project_message", "timeout_seconds", "continue_on_error"],
-      trigger_project_event: ["project_repo", "project_ref", "project_event_type", "project_message", "timeout_seconds", "continue_on_error"]
+      run_command: ["command", "result_exit_codes", "timeout_seconds", "retry_attempts", "retry_backoff_seconds", "continue_on_error"],
+      send_http_request: ["http_method", "http_url", "http_headers", "http_body", "result_statuses", "timeout_seconds", "retry_attempts", "retry_backoff_seconds", "continue_on_error"],
+      send_project_message: ["project_repo", "project_ref", "project_message", "timeout_seconds", "retry_attempts", "retry_backoff_seconds", "continue_on_error"],
+      trigger_project_event: ["project_repo", "project_ref", "project_event_type", "project_message", "timeout_seconds", "retry_attempts", "retry_backoff_seconds", "continue_on_error"]
     };
     const eventicPostActionFields = {
       run_command: ["post_command", "post_result_exit_codes", "post_timeout_seconds", "post_continue_on_error"],
@@ -1142,7 +1217,17 @@
         return;
       }
       const button = event.target.closest("[data-eventic-delete]");
-      if (!button) return;
+      if (!button) {
+        const replay = event.target.closest("[data-eventic-replay]");
+        if (!replay) return;
+        try {
+          await eventicRequest(replay.dataset.eventicReplay);
+          window.location.reload();
+        } catch (err) {
+          alert(err.message);
+        }
+        return;
+      }
       try {
         await eventicRequest(button.dataset.eventicDelete);
         window.location.reload();

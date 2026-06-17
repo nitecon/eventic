@@ -34,6 +34,7 @@ const (
 	configurationPageStableEvents     = "stable-events"
 	configurationPageVisualMappings   = "visual-mappings"
 	configurationPageAdvancedMappings = "advanced-mappings"
+	configurationPageEventHistory     = "event-history"
 )
 
 // dashboardView is the server-side view-model rendered into the dashboard
@@ -76,6 +77,7 @@ type configurationView struct {
 	ShowStablePage bool
 	ShowMapper     bool
 	ShowAdvanced   bool
+	ShowHistory    bool
 	Orgs           []string
 	DefaultOrg     string
 	Projects       []ProjectSummary
@@ -91,6 +93,7 @@ type configurationView struct {
 	ProviderEvents []providerEventConfig
 	ProviderTypes  []selectOption
 	EventMappings  []eventMappingConfig
+	InboundEvents  []InboundEventRecord
 }
 
 type eventMappingConfig struct {
@@ -201,6 +204,8 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 			page == configurationPageVisualMappings,
 		ShowAdvanced: scope == WorkflowScopeGlobal &&
 			page == configurationPageAdvancedMappings,
+		ShowHistory: scope == WorkflowScopeGlobal &&
+			page == configurationPageEventHistory,
 		DefaultOrg:   "nitecon",
 		Events:       workflowEventOptionsFromStableEvents(stableEvents),
 		Actions:      workflowActionOptions(),
@@ -228,6 +233,8 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 			view.Title = "Event Mapper"
 		case configurationPageAdvancedMappings:
 			view.Title = "Advanced Mappings"
+		case configurationPageEventHistory:
+			view.Title = "Event History"
 		default:
 			view.Title = "Global Workflows"
 		}
@@ -244,6 +251,13 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 		if view.ShowMapper {
 			view.ProviderEvents = providerEventConfigs(ProviderEventCatalog())
 			view.ProviderTypes = ProviderEventOptions()
+		}
+		if view.ShowHistory {
+			events, err := store.ListInboundEvents(r.Context(), InboundEventFilter{Limit: 100})
+			if err != nil {
+				return configurationView{}, true, err
+			}
+			view.InboundEvents = events
 		}
 	} else {
 		view.Owner, view.Name = splitRepoName(repo)
@@ -328,6 +342,9 @@ func configurationRoute(path string) (string, string, string, bool) {
 	}
 	if clean == "global/mappings/advanced" {
 		return WorkflowScopeGlobal, "", configurationPageAdvancedMappings, true
+	}
+	if clean == "global/events/history" {
+		return WorkflowScopeGlobal, "", configurationPageEventHistory, true
 	}
 
 	parts := strings.Split(clean, "/")

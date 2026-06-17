@@ -306,6 +306,7 @@ func webMux(cfg Config, logStore *ExecutionLog, projectStore *ProjectStore, repl
 	// hierarchy can be server-rendered on each request.
 	mux.Handle("/global", configurationHandler(projectStore))
 	mux.Handle("/global/events", configurationHandler(projectStore))
+	mux.Handle("/global/events/history", configurationHandler(projectStore))
 	mux.Handle("/global/mappings", configurationHandler(projectStore))
 	mux.Handle("/global/mappings/advanced", configurationHandler(projectStore))
 	mux.Handle("/{org}/{repo}", configurationHandler(projectStore))
@@ -326,6 +327,8 @@ func webMux(cfg Config, logStore *ExecutionLog, projectStore *ProjectStore, repl
 	mux.HandleFunc("/api/projects", apiProjectsHandler(projectStore))
 	mux.HandleFunc("/api/projects/", apiProjectsHandler(projectStore))
 	mux.HandleFunc("/api/refs", apiRefsHandler(cfg))
+	mux.HandleFunc("/api/events", inboundEventsCollectionHandler(projectStore))
+	mux.HandleFunc("/api/events/", inboundEventItemHandler(projectStore, replay))
 	mux.HandleFunc("/api/runs", runsCollectionHandler(projectStore, replay))
 	mux.HandleFunc("/api/runs/", runItemHandler(projectStore))
 

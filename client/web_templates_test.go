@@ -2,10 +2,13 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nitecon/eventic/protocol"
 )
 
 // seedTemplateStore creates an in-memory store seeded with a predictable
@@ -225,6 +228,7 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		`href="/global/events"`,
 		`href="/global/mappings"`,
 		`href="/global/mappings/advanced"`,
+		`href="/global/events/history"`,
 		`for="workflow-continue-on-error"`,
 		`id="workflow-continue-on-error" type="checkbox"`,
 		`name="action_type"`,
@@ -275,6 +279,7 @@ func TestConfigurationTemplateStableEventsPage(t *testing.T) {
 		`data-eventic-action="PUT /api/stable-events/`,
 		`href="/global"`,
 		`href="/global/mappings"`,
+		`href="/global/events/history"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("expected stable events page to contain %q", expected)
@@ -316,6 +321,7 @@ func TestConfigurationTemplateVisualMapperPage(t *testing.T) {
 		`data-eventic-provider-filter`,
 		`href="/global/events"`,
 		`href="/global/mappings/advanced"`,
+		`href="/global/events/history"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("expected visual mapper page to contain %q", expected)
@@ -356,6 +362,7 @@ func TestConfigurationTemplateAdvancedMappingsPage(t *testing.T) {
 		`data-eventic-action="PUT /api/event-mappings/`,
 		`for="mapping-conditions"`,
 		`href="/global/mappings"`,
+		`href="/global/events/history"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("expected advanced mappings page to contain %q", expected)
@@ -375,6 +382,66 @@ func TestConfigurationTemplateAdvancedMappingsPage(t *testing.T) {
 	} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("expected advanced mappings page not to contain %q", unwanted)
+		}
+	}
+}
+
+func TestConfigurationTemplateEventHistoryPage(t *testing.T) {
+	store := seedTemplateStore(t)
+	ctx := context.Background()
+	event := protocol.EventMsg{
+		DeliveryID:     "history-1",
+		Provider:       "github",
+		GitHubEvent:    "dependabot_alert",
+		ExternalEvent:  "dependabot_alert",
+		ExternalAction: "created",
+		Repo:           "nitecon/alpha",
+		Sender:         "dependabot",
+		Metadata:       map[string]string{"severity": "HIGH"},
+		Payload:        json.RawMessage(`{"action":"created"}`),
+	}
+	event, normalized, err := NormalizeInboundEvent(ctx, store, event)
+	if err != nil {
+		t.Fatalf("normalize event: %v", err)
+	}
+	if err := store.RecordInboundEvent(ctx, event, normalized); err != nil {
+		t.Fatalf("record inbound event: %v", err)
+	}
+	if err := store.FinishInboundEvent(ctx, event.DeliveryID, "failure", "ticket created"); err != nil {
+		t.Fatalf("finish inbound event: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/global/events/history", nil)
+	req.Host = "localhost:16384"
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"Event History",
+		`id="event-history"`,
+		"nitecon/alpha",
+		"dependabot_alert.created",
+		StableEventSecurityAlarm,
+		`data-eventic-replay="POST /api/events/`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("expected event history page to contain %q", expected)
+		}
+	}
+	for _, unwanted := range []string{
+		`id="workflow-create"`,
+		`id="workflow-configuration"`,
+		`id="stable-events-management"`,
+		`id="event-mapper"`,
+		`id="event-mappings"`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("expected event history page not to contain %q", unwanted)
 		}
 	}
 }

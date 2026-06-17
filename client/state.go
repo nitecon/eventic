@@ -587,6 +587,32 @@ func (s *ProjectStore) migrate(ctx context.Context) error {
 			updated_at DATETIME NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_event_mappings_priority ON event_mappings(priority DESC, mapping_id);
+		CREATE TABLE IF NOT EXISTS inbound_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			delivery_id TEXT NOT NULL UNIQUE,
+			repo TEXT NOT NULL DEFAULT '',
+			ref TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL DEFAULT '',
+			external_event TEXT NOT NULL DEFAULT '',
+			external_action TEXT NOT NULL DEFAULT '',
+			stable_event TEXT NOT NULL DEFAULT '',
+			mapping_id TEXT NOT NULL DEFAULT '',
+			mapping_name TEXT NOT NULL DEFAULT '',
+			mapping_status TEXT NOT NULL DEFAULT '',
+			actor TEXT NOT NULL DEFAULT '',
+			severity TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			clone_url TEXT NOT NULL DEFAULT '',
+			metadata TEXT NOT NULL DEFAULT '{}',
+			payload TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT 'received',
+			description TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_inbound_events_repo_created ON inbound_events(repo, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_inbound_events_stable_created ON inbound_events(stable_event, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_inbound_events_provider_created ON inbound_events(provider, created_at DESC);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate state db: %w", err)

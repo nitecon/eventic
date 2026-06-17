@@ -404,50 +404,19 @@ func parseWebhook(eventType, deliveryID string, body []byte, headers map[string]
 }
 
 func parseGenericWebhook(provider string, headers http.Header, body []byte) (*protocol.EventMsg, error) {
+	provider = normalizeProviderName(provider)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("unmarshal webhook: %w", err)
 	}
 
 	eventType := providerEventType(provider, headers, payload)
-	action := firstPayloadString(payload,
-		"action",
-		"event.action",
-		"object_attributes.action",
-		"object_attributes.state",
-		"status",
-	)
-	repo := firstPayloadString(payload,
-		"repo",
-		"repository.full_name",
-		"repository.full_name",
-		"project.path_with_namespace",
-		"commonLabels.repo",
-		"alerts[].labels.repo",
-		"labels.repo",
-	)
-	ref := firstPayloadString(payload,
-		"ref",
-		"push.changes[].new.name",
-		"object_attributes.target_branch",
-		"commonLabels.ref",
-		"alerts[].labels.ref",
-	)
-	sender := firstPayloadString(payload,
-		"sender",
-		"sender.login",
-		"user_username",
-		"user.name",
-		"actor",
-		"commonLabels.alertname",
-	)
-	message := firstPayloadString(payload, "message", "title", "body", "commonAnnotations.summary", "commonAnnotations.description")
-	cloneURL := firstPayloadString(payload,
-		"clone_url",
-		"repository.clone_url",
-		"project.git_http_url",
-		"project.http_url",
-	)
+	action := providerAction(provider, eventType, payload)
+	repo := providerRepo(provider, payload)
+	ref := providerRef(provider, eventType, payload)
+	sender := providerSender(provider, payload)
+	message := providerMessage(provider, payload)
+	cloneURL := providerCloneURL(provider, payload, repo)
 	if cloneURL == "" && repo != "" {
 		cloneURL = "https://github.com/" + repo + ".git"
 	}
@@ -482,22 +451,235 @@ func parseGenericWebhook(provider string, headers http.Header, body []byte) (*pr
 	return event, nil
 }
 
+func normalizeProviderName(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "alertmanager":
+		return "prometheus"
+	default:
+		return provider
+	}
+}
+
 func providerEventType(provider string, headers http.Header, payload map[string]any) string {
 	switch provider {
 	case "gitlab":
-		return normalizeProviderEvent(headers.Get("X-Gitlab-Event"))
+		return normalizeProviderEvent(firstNonEmpty(headers.Get("X-Gitlab-Event"), firstPayloadString(payload, "object_kind", "event_name")))
 	case "bitbucket":
-		return normalizeProviderEvent(headers.Get("X-Event-Key"))
+		return normalizeProviderEvent(firstNonEmpty(headers.Get("X-Event-Key"), firstPayloadString(payload, "event", "event_key", "type")))
 	case "prometheus", "alertmanager":
 		return "alert"
+	case "discord":
+		return discordEventType(payload)
 	default:
 		return normalizeProviderEvent(firstNonEmpty(
 			headers.Get("X-GitHub-Event"),
 			headers.Get("X-Gitlab-Event"),
 			headers.Get("X-Event-Key"),
-			firstPayloadString(payload, "event", "event_type", "type"),
+			firstPayloadString(payload, "event", "event_type", "type", "object_kind"),
 			provider,
 		))
+	}
+}
+
+func providerAction(provider, eventType string, payload map[string]any) string {
+	switch provider {
+	case "gitlab":
+		return firstPayloadString(payload,
+			"action",
+			"object_attributes.action",
+			"object_attributes.state",
+			"object_attributes.status",
+			"build_status",
+			"status",
+		)
+	case "bitbucket":
+		return firstPayloadString(payload,
+			"commit_status.state",
+			"pullrequest.state",
+			"push.changes[].new.type",
+			"action",
+		)
+	case "discord":
+		return firstPayloadString(payload, "data.name", "event.action", "action", "name", "type")
+	case "prometheus":
+		return firstPayloadString(payload, "status", "alerts[].status")
+	default:
+		return firstPayloadString(payload,
+			"action",
+			"event.action",
+			"object_attributes.action",
+			"object_attributes.state",
+			"status",
+			"state",
+			"type",
+		)
+	}
+}
+
+func providerRepo(provider string, payload map[string]any) string {
+	switch provider {
+	case "gitlab":
+		return firstPayloadString(payload,
+			"repo",
+			"project.path_with_namespace",
+			"repository.full_name",
+			"object_attributes.project.path_with_namespace",
+		)
+	case "bitbucket":
+		return firstPayloadString(payload,
+			"repo",
+			"repository.full_name",
+			"repository.fullName",
+			"pullrequest.destination.repository.full_name",
+			"commit_status.repository.full_name",
+		)
+	case "prometheus":
+		return firstPayloadString(payload,
+			"repo",
+			"repository",
+			"commonLabels.repo",
+			"commonLabels.repository",
+			"commonLabels.project",
+			"alerts[].labels.repo",
+			"alerts[].labels.repository",
+			"alerts[].labels.project",
+			"labels.repo",
+			"labels.repository",
+		)
+	case "discord":
+		return firstPayloadString(payload,
+			"repo",
+			"metadata.repo",
+			"data.repo",
+			"data.options[].value",
+		)
+	default:
+		return firstPayloadString(payload,
+			"repo",
+			"repository.full_name",
+			"project.path_with_namespace",
+			"metadata.repo",
+			"commonLabels.repo",
+			"alerts[].labels.repo",
+			"labels.repo",
+		)
+	}
+}
+
+func providerRef(provider, eventType string, payload map[string]any) string {
+	switch provider {
+	case "bitbucket":
+		if ref := bitbucketRef(payload); ref != "" {
+			return ref
+		}
+	case "gitlab":
+		if ref := firstPayloadString(payload, "ref"); ref != "" {
+			return normalizeGitRef("", ref)
+		}
+		if ref := firstPayloadString(payload, "object_attributes.ref"); ref != "" {
+			return normalizeGitRef("branch", ref)
+		}
+		if branch := firstPayloadString(payload, "object_attributes.target_branch", "object_attributes.source_branch"); branch != "" {
+			return normalizeGitRef("branch", branch)
+		}
+	}
+	return normalizeGitRef("", firstPayloadString(payload,
+		"ref",
+		"push.changes[].new.name",
+		"object_attributes.target_branch",
+		"commonLabels.ref",
+		"alerts[].labels.ref",
+		"labels.ref",
+	))
+}
+
+func providerSender(provider string, payload map[string]any) string {
+	switch provider {
+	case "gitlab":
+		return firstPayloadString(payload, "user_username", "user.name", "user.email", "user_name")
+	case "bitbucket":
+		return firstPayloadString(payload, "actor.username", "actor.display_name", "actor.nickname")
+	case "prometheus":
+		return firstPayloadString(payload, "commonLabels.alertname", "alerts[].labels.alertname", "receiver")
+	case "discord":
+		return firstPayloadString(payload, "member.user.username", "user.username", "author.username", "sender")
+	default:
+		return firstPayloadString(payload, "sender", "sender.login", "user_username", "user.name", "actor", "commonLabels.alertname")
+	}
+}
+
+func providerMessage(provider string, payload map[string]any) string {
+	switch provider {
+	case "gitlab":
+		return firstPayloadString(payload, "message", "object_attributes.title", "commit.message", "build_name", "project.name")
+	case "bitbucket":
+		return firstPayloadString(payload, "message", "pullrequest.title", "commit_status.description", "push.changes[].new.target.message")
+	case "discord":
+		return firstPayloadString(payload, "message", "content", "data.name", "event.body", "title", "body")
+	case "prometheus":
+		return firstPayloadString(payload, "commonAnnotations.summary", "commonAnnotations.description", "alerts[].annotations.summary", "alerts[].annotations.description")
+	default:
+		return firstPayloadString(payload, "message", "title", "body", "commonAnnotations.summary", "commonAnnotations.description")
+	}
+}
+
+func providerCloneURL(provider string, payload map[string]any, repo string) string {
+	switch provider {
+	case "gitlab":
+		return firstPayloadString(payload, "project.git_http_url", "project.http_url", "repository.git_http_url", "clone_url")
+	case "bitbucket":
+		return firstPayloadString(payload, "repository.links.html.href", "pullrequest.destination.repository.links.html.href", "clone_url")
+	default:
+		return firstPayloadString(payload, "clone_url", "repository.clone_url", "project.git_http_url", "project.http_url")
+	}
+}
+
+func bitbucketRef(payload map[string]any) string {
+	refType := firstPayloadString(payload, "push.changes[].new.type", "push.changes[].old.type")
+	refName := firstPayloadString(payload, "push.changes[].new.name", "push.changes[].old.name")
+	if refName != "" {
+		return normalizeGitRef(refType, refName)
+	}
+	if branch := firstPayloadString(payload, "pullrequest.destination.branch.name", "pullrequest.source.branch.name"); branch != "" {
+		return normalizeGitRef("branch", branch)
+	}
+	return ""
+}
+
+func normalizeGitRef(refType, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "refs/") {
+		return value
+	}
+	switch strings.ToLower(strings.TrimSpace(refType)) {
+	case "tag":
+		return "refs/tags/" + value
+	case "branch", "named_branch":
+		return "refs/heads/" + value
+	default:
+		return value
+	}
+}
+
+func discordEventType(payload map[string]any) string {
+	raw := firstPayloadString(payload, "event", "event.type", "event_type")
+	if raw != "" {
+		return normalizeProviderEvent(raw)
+	}
+	switch firstPayloadString(payload, "type") {
+	case "1":
+		return "ping"
+	case "2":
+		return "application_command"
+	case "3":
+		return "message_component"
+	case "4":
+		return "application_command_autocomplete"
+	case "5":
+		return "modal_submit"
+	default:
+		return "message"
 	}
 }
 
@@ -538,15 +720,33 @@ func webhookMetadata(body []byte, ref string) map[string]string {
 	if sha := firstPayloadString(payload, "after", "head_commit.id", "workflow_run.head_sha"); sha != "" {
 		metadata["commit_sha"] = sha
 	}
+	if sha := firstPayloadString(payload,
+		"checkout_sha",
+		"object_attributes.sha",
+		"object_attributes.last_commit.id",
+		"push.changes[].new.target.hash",
+		"commit_status.commit.hash",
+		"commit.hash",
+	); sha != "" && metadata["commit_sha"] == "" {
+		metadata["commit_sha"] = sha
+	}
 	if severity := firstPayloadString(payload,
 		"alert.security_advisory.severity",
 		"security_advisory.severity",
 		"commonLabels.severity",
 		"alerts[].labels.severity",
 		"vulnerabilities[].severity",
+		"vulnerability.severity",
+		"finding.severity",
+		"alert.rule.severity",
 		"severity",
 	); severity != "" {
 		metadata["severity"] = strings.ToUpper(severity)
+	}
+	for _, key := range []string{"alertname", "cluster", "namespace", "service", "environment"} {
+		if value := firstPayloadString(payload, "commonLabels."+key, "alerts[].labels."+key, "labels."+key); value != "" {
+			metadata[key] = value
+		}
 	}
 	return metadata
 }

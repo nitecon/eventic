@@ -332,23 +332,23 @@ The console serves the [Workflow API](#workflow-api) plus a small set of legacy/
 | `/events/stream` | Server-Sent Events stream for live execution updates |
 | `/healthz` | Local health check |
 
-When persistent state is enabled, SQLite stores one current row per managed repository in the `projects` table (repo name, latest event/action/delivery ID, final state, latest combined output, description, checked-out git ref and commit hash, timing fields). Authored workflows live in `workflows` / `workflow_nodes` / `workflow_edges`, and each execution is recorded in `workflow_runs` / `workflow_run_nodes` with bounded per-node output. A compatibility `project_events` history table keeps the last few delivery records per repository.
+When persistent state is enabled, SQLite stores one current row per managed repository in the `projects` table (repo name, latest event/action/delivery ID, final state, latest combined output, description, checked-out git ref and commit hash, timing fields). Authored workflows live in `workflows` / `workflow_nodes` / `workflow_edges`, and each execution is recorded in `workflow_runs` / `workflow_run_nodes` with bounded per-node output. A compatibility `project_events` history table keeps the last few delivery records per repository. The `inbound_events` audit table records normalized provider events, matched mapping metadata, severity/context metadata, final state, and bounded raw payload for replay/debugging.
 
 ### Stable Event Normalization
 
-External providers are normalized before workflow resolution. A GitHub `push`, a GitLab merge to main, a Prometheus alert, or a security scanner finding can all map to stable internal event keys. Workflows should be authored against those stable keys when provider portability matters.
+External providers are normalized before workflow resolution. A GitHub `push`, GitLab pipeline or merge request, Bitbucket push/status, Prometheus Alertmanager alert, Discord adapter command, or security scanner finding can all map to stable internal event keys. Workflows should be authored against those stable keys when provider portability matters.
 
 Default mappings are seeded into the client SQLite database and can be changed from `/global` or through the API:
 
 | Stable event | Default sources | Useful workflows |
 |---|---|---|
-| `artifact.initiate` | GitHub `push` on `refs/heads/main` | Build an artifact, start security scans, notify engineering |
-| `artifact.published` | GitHub `release.published` | Promote an already-built artifact, restart services, start smoke tests |
-| `system.failure` | GitHub failed `workflow_run`, Prometheus firing alert | Notify a project, correlate with recent deploys, page or roll back |
-| `security.alarm` | GitHub `dependabot_alert.created`, critical scan finding | Mark artifact tainted, open a ticket, notify security owners |
-| `communication.received` | Eventic `comms` or custom message webhook | Route agent/application messages into a workflow |
+| `artifact.initiate` | GitHub/GitLab/Bitbucket main-branch push or merge | Build an artifact, start security scans, notify engineering |
+| `artifact.published` | GitHub release, GitLab/Bitbucket tag push | Promote an already-built artifact, restart services, start smoke tests |
+| `system.failure` | GitHub failed `workflow_run`, GitLab failed pipeline, Bitbucket failed status, Prometheus firing alert | Notify a project, correlate with recent deploys, page or roll back |
+| `security.alarm` | GitHub Dependabot/code-scanning/security advisory, GitLab vulnerability, critical scan finding | Mark artifact tainted, open a ticket, notify security owners |
+| `communication.received` | Eventic `comms`, Discord adapter command, or custom message webhook | Route agent/application messages into a workflow |
 
-Mapping conditions are JSON objects. Keys can reference provider fields (`event`, `action`, `ref`, `repo`, `sender`), headers (`headers.X-GitHub-Event`), metadata (`metadata.severity`), or payload paths (`body.workflow_run.conclusion`, `body.vulnerabilities[].severity`). Values match case-insensitively; `*` matches any value. A mapping provider of `*` applies to every provider.
+Mapping conditions are JSON objects. Keys can reference provider fields (`event`, `action`, `ref`, `repo`, `sender`), headers (`headers.X-GitHub-Event`), metadata (`metadata.severity`), or payload paths (`body.workflow_run.conclusion`, `body.vulnerabilities[].severity`). Values match case-insensitively; `*` matches any value. A mapping provider of `*` applies to every provider. Eventic rejects duplicate mappings with the same provider, target stable event, and condition set.
 
 ```json
 {
@@ -361,7 +361,9 @@ Mapping conditions are JSON objects. Keys can reference provider fields (`event`
 }
 ```
 
-Non-GitHub provider payloads must include or expose a target `repo` (`org/repo`) so the relay can route to subscribed clients and the workflow runner has a checkout context. Prometheus-style hooks can provide `commonLabels.repo`; custom hooks can provide a top-level `repo`.
+Non-GitHub provider payloads must include or expose a target `repo` (`org/repo`) so the relay can route to subscribed clients and the workflow runner has a checkout context. Prometheus-style hooks can provide `commonLabels.repo`; custom hooks can provide a top-level `repo`. Bitbucket events are normalized from header names like `repo:push` into condition keys like `repo.push`, and push refs are expanded to `refs/heads/*` or `refs/tags/*` when possible.
+
+Open `/global/events/history` to inspect normalized inbound events. The history shows provider, external event/action, stable event, mapping status, mapping id/name, severity, final state, and a replay action. The same data is available from `GET /api/events`.
 
 For Kubernetes clients, mount persistent storage at `/opt/eventic/state` or set `state.path` to a path inside your own volume mount:
 
@@ -452,7 +454,7 @@ A **workflow** is a directed acyclic graph (DAG) of typed action **nodes** bound
 
 For the full model (nodes, edges, conditions, context passing, parallelism, and a worked agentic example) see **[docs/Workflows.md](docs/Workflows.md)**. The essentials:
 
-- **Nodes** use typed actions: `run_command`, `send_http_request`, `send_project_message`, or `trigger_project_event`. Each action has typed config, status/exit-code evaluation, optional response handling (`noop`, `send_data`, `iterate_data`), optional `post_actions`, `capture`, `timeout`, and `continue_on_error`.
+- **Nodes** use typed actions: `run_command`, `send_http_request`, `send_project_message`, or `trigger_project_event`. Each action has typed config, status/exit-code evaluation, optional response handling (`noop`, `send_data`, `iterate_data`), optional `post_actions`, `capture`, retry attempts/backoff, `timeout`, and `continue_on_error`.
 - **Edges** are directed and conditional. A node becomes eligible when all its parents are terminal, and runs only if at least one incoming edge condition is satisfied; otherwise it is **skipped** (skips propagate). Supported conditions:
 
   | Condition | Runs the target when… |
@@ -530,6 +532,9 @@ When `web.enabled` is true the client exposes a JSON/WS API for authoring workfl
 | `POST` | `/api/event-mappings` | Create a mapping `{provider, name, enabled, priority, conditions|conditions_text, target_stable_event}` |
 | `PUT` | `/api/event-mappings/{id}` | Update one mapping |
 | `DELETE` | `/api/event-mappings/{id}` | Delete one mapping |
+| `GET` | `/api/events?repo=&provider=&stable_event=&state=&limit=` | List persisted inbound normalized event audit records |
+| `GET` | `/api/events/{id}` | Fetch one inbound event audit record |
+| `POST` | `/api/events/{id}/replay` | Replay a previously recorded normalized event |
 | `GET` | `/api/projects`, `/api/projects/{repo}` | Managed-project summaries |
 | `GET` | `/api/refs?repo=org/repo` | Local branch/tag refs for the repo |
 | `GET` | `/api/runs?repo=&workflow=` | List runs |

@@ -29,6 +29,7 @@ content:
     - client/stable_event_store.go
     - client/stable_event_registry.go
     - client/provider_events.go
+    - client/event_audit.go
     - client/workflow_store.go
     - server/server.go
     - client/web.go
@@ -66,6 +67,7 @@ content:
         - HTTP steps use `http_method`, `http_url`, optional `http_headers`, optional `http_body`, and `result_statuses` (for example `200-299`).
         - Command steps use `command` and `result_exit_codes` (for example `0`).
         - Project message/event steps use `project_repo`, optional `project_ref`, `project_message`, and for trigger-event steps `project_event_type`.
+        - Retry hardening uses `retry_attempts` (total attempts, default `1`, max `10`) and `retry_backoff_seconds` (default `0`, max `3600`) on primary typed steps. Runtime retries execution, result evaluation, and response/post-action handling failures within the existing node timeout context.
         - Response handling uses `response_mode` (`noop`, `send_data`, `iterate_data`), optional dot-notation `response_path` (for example `body.items.0.name`), and `response_capture` when data should be stored for downstream conditions/steps.
         - Steps can define durable `post_actions` in `workflow_nodes.config`. The editor exposes the first post action through `post_action_type`, `post_command`, `post_http_*`, `post_project_*`, `post_result_*`, `post_continue_on_error`, and `post_timeout_seconds` fields.
         - For `send_data`, post actions run once with `${EVENTIC_RESPONSE_DATA}` set to the selected response data. For `iterate_data`, post actions run once per selected array item with `${EVENTIC_ITEM}` and `${EVENTIC_ITEM_INDEX}` set.
@@ -97,13 +99,24 @@ content:
         - Mapping payloads use `provider`, `name`, `enabled`, `priority`, `conditions` or `conditions_text`, and `target_stable_event`. A provider value of `*` applies to every provider. Conditions can match `event`, `action`, `ref`, `repo`, `sender`, `headers.Name`, `metadata.name`, or `body.path` values, including glob values like `refs/tags/*` and array wildcards like `body.vulnerabilities[].severity`.
         - New mapping payloads should omit `mapping_id`; the server generates a UUID mapping ID. Update payloads may omit `mapping_id`, in which case the existing value is preserved.
         - Default mappings include `artifact.initiate`, `artifact.published`, `system.failure`, `security.alarm`, and `communication.received`.
+        - Duplicate mappings with the same provider, target stable event, and condition set return HTTP 409.
         - Runtime workflow resolution uses `StableEvent` with no action suffix when normalization matched; otherwise it preserves legacy repo/action, repo/event, global/action, global/event precedence.
+    - name: Inspect inbound event history
+      steps:
+        - Open `GET /global/events/history` for normalized inbound event audit records.
+        - The history page is for observability only; it does not render workflow forms, stable event creation/edit forms, provider drag/drop cards, or advanced mapping edit forms.
+        - Records are loaded from the `inbound_events` SQLite audit table and show repo, provider, external event/action, stable event, mapping status, mapping id/name, final state, severity, and replay controls.
+        - Use `GET /api/events?repo=&provider=&stable_event=&state=&limit=` to list normalized event records.
+        - Use `GET /api/events/{id}` to fetch one event record.
+        - Use `POST /api/events/{id}/replay` to replay the recorded normalized event through the same replay dispatcher used by manual workflow runs.
     - name: Ingest provider webhooks
       steps:
         - The public relay still accepts GitHub at `POST /webhook/github` with `X-Hub-Signature-256`.
         - The generic ingress path is `POST /v1/webhooks/{provider}`. `github` uses the same HMAC validation; non-GitHub providers use `Authorization: Bearer <token>` checked against `EVENTIC_COMMS_TOKENS` or `EVENTIC_CLIENT_TOKENS`.
         - Generic payloads must provide or expose a target `repo` (`org/repo`) so the relay can fan out to subscribed clients and the client can run a repository-scoped workflow.
-        - GitLab, Bitbucket, Prometheus/Alertmanager, and custom payloads are parsed into `EventMsg.Provider`, `ExternalEvent`, `ExternalAction`, `Headers`, `Metadata`, and raw `Payload`; the client then applies stable event mappings.
+        - GitLab, Bitbucket, Prometheus/Alertmanager, Discord adapter, and custom payloads are parsed into `EventMsg.Provider`, `ExternalEvent`, `ExternalAction`, `Headers`, `Metadata`, and raw `Payload`; the client then applies stable event mappings.
+        - Bitbucket `X-Event-Key` values such as `repo:push` are normalized to dot-form `repo.push`; Bitbucket push refs are expanded to `refs/heads/*` or `refs/tags/*` when the payload exposes branch/tag type.
+        - Provider metadata extraction includes `commit_sha`, `severity`, `alertname`, `cluster`, `namespace`, `service`, and `environment` when those values are present in common provider payload fields.
         - Direct stable event ingress is `POST /event/{stable_event}` with Bearer-token auth. The JSON body must include `repo` and may include `ref`, `title`, `body`, `action`, `message`, `sender`, `clone_url`, and string metadata. The relay sets `EventMsg.StableEvent` to the path segment and bypasses provider mapping.
     - name: Use project and workflow APIs
       steps:
@@ -117,6 +130,9 @@ content:
         - "`POST /api/stable-events`, `PUT /api/stable-events/{id}`, and `DELETE /api/stable-events/{id}` manage custom stable events. Deleting a custom stable event also removes mappings targeting that key."
         - "`GET /api/provider-events?provider=` returns provider-event palette rows with provider, event, action, label, description, and mapping conditions."
         - "`GET/POST /api/event-mappings` and `PUT/DELETE /api/event-mappings/{id}` are the local mapping registry API."
+        - "`GET /api/events?repo=&provider=&stable_event=&state=&limit=` lists persisted normalized inbound event audit records."
+        - "`GET /api/events/{id}` returns one normalized inbound event audit record."
+        - "`POST /api/events/{id}/replay` replays the recorded normalized event with a new `replay-*` delivery id."
         - "`GET /api/runs?repo=ORG/REPO&limit=N` lists runs for one repo; omitting `repo` lists recent runs across repositories."
         - "`POST /api/runs` triggers a manual replay event with `repo`, `event_type`, `ref`, and optional `message`."
         - "`GET /ws/runs` streams WebSocket run updates for ndesign rows; `/api/runs/stream` and `/events/stream` are SSE fallbacks."

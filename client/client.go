@@ -247,8 +247,14 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 		Str("repo", event.Repo).
 		Str("source", normalized.Source).
 		Str("stable_event", normalized.StableEvent).
+		Str("mapping_status", normalized.MappingStatus).
+		Str("mapping_id", normalized.MappingID).
 		Str("external_event", firstNonEmpty(event.ExternalEvent, event.GitHubEvent)).
 		Msg("event normalized")
+
+	if err := projectStore.RecordInboundEvent(ctx, event, normalized); err != nil {
+		log.Warn().Err(err).Str("repo", event.Repo).Str("delivery", event.DeliveryID).Msg("failed to record inbound event")
+	}
 
 	state := "success"
 	desc := ""
@@ -257,6 +263,9 @@ func processEvent(ctx context.Context, conn *websocket.Conn, cfg Config, event p
 	defer func() {
 		if finishedEvent := webLog.FinishEvent(event.DeliveryID, state, desc); finishedEvent != nil {
 			projectStore.FinishProject(ctx, *finishedEvent)
+		}
+		if err := projectStore.FinishInboundEvent(ctx, event.DeliveryID, state, desc); err != nil {
+			log.Warn().Err(err).Str("delivery", event.DeliveryID).Msg("failed to finish inbound event")
 		}
 	}()
 

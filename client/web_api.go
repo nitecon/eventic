@@ -247,6 +247,8 @@ type workflowConfigRequest struct {
 	ResponseMode        string                `json:"response_mode"`
 	ResponsePath        string                `json:"response_path"`
 	ResponseCapture     string                `json:"response_capture"`
+	RetryAttempts       intish                `json:"retry_attempts"`
+	RetryBackoffSeconds intish                `json:"retry_backoff_seconds"`
 	PostActionName      string                `json:"post_action_name"`
 	PostActionType      string                `json:"post_action_type"`
 	PostCommand         string                `json:"post_command"`
@@ -667,6 +669,8 @@ func workflowStepRequestFromConfig(req workflowConfigRequest) workflowStepReques
 		ResponseMode:        req.ResponseMode,
 		ResponsePath:        req.ResponsePath,
 		ResponseCapture:     req.ResponseCapture,
+		RetryAttempts:       req.RetryAttempts,
+		RetryBackoffSeconds: req.RetryBackoffSeconds,
 		PostActionName:      req.PostActionName,
 		PostActionType:      req.PostActionType,
 		PostCommand:         req.PostCommand,
@@ -1112,6 +1116,10 @@ func eventMappingsCollectionHandler(store *ProjectStore) http.HandlerFunc {
 				mapping.MappingID = nextEventMappingID()
 			}
 			id, err := store.CreateEventMapping(r.Context(), mapping)
+			if errors.Is(err, ErrEventMappingDuplicate) {
+				writeAPIError(w, http.StatusConflict, map[string]string{"conditions_text": "duplicate mapping already exists"})
+				return
+			}
 			if err != nil {
 				globalError(w, http.StatusInternalServerError, "failed to create event mapping")
 				return
@@ -1157,6 +1165,10 @@ func eventMappingItemHandler(store *ProjectStore) http.HandlerFunc {
 			err := store.UpdateEventMapping(r.Context(), mapping)
 			if isNotFound(err) {
 				globalError(w, http.StatusNotFound, "event mapping not found")
+				return
+			}
+			if errors.Is(err, ErrEventMappingDuplicate) {
+				writeAPIError(w, http.StatusConflict, map[string]string{"conditions_text": "duplicate mapping already exists"})
 				return
 			}
 			if err != nil {
@@ -1231,6 +1243,110 @@ func validateEventMapping(mapping *EventMapping) map[string]string {
 
 func nextEventMappingID() string {
 	return uuid.NewString()
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+// inboundEventsCollectionHandler serves the persisted normalization audit log.
+func inboundEventsCollectionHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+		if r.Method != http.MethodGet {
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		limit := 0
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil {
+				limit = parsed
+			}
+		}
+		events, err := store.ListInboundEvents(r.Context(), InboundEventFilter{
+			Repo:        strings.TrimSpace(r.URL.Query().Get("repo")),
+			Provider:    strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider"))),
+			StableEvent: strings.TrimSpace(r.URL.Query().Get("stable_event")),
+			State:       strings.TrimSpace(r.URL.Query().Get("state")),
+			Limit:       limit,
+		})
+		if err != nil {
+			globalError(w, http.StatusInternalServerError, "failed to list inbound events")
+			return
+		}
+		if events == nil {
+			events = []InboundEventRecord{}
+		}
+		writeJSON(w, http.StatusOK, events)
+	}
+}
+
+func inboundEventItemHandler(store *ProjectStore, replay ReplayDispatcher) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+		trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/events/"), "/")
+		if trimmed == "" {
+			globalError(w, http.StatusNotFound, "not found")
+			return
+		}
+		parts := strings.Split(trimmed, "/")
+		id, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || id <= 0 {
+			globalError(w, http.StatusBadRequest, "invalid event id")
+			return
+		}
+
+		if len(parts) == 1 {
+			if r.Method != http.MethodGet {
+				globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			record, err := store.GetInboundEvent(r.Context(), id)
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "event not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to load event")
+				return
+			}
+			writeJSON(w, http.StatusOK, record)
+			return
+		}
+
+		if len(parts) == 2 && parts[1] == "replay" {
+			if r.Method != http.MethodPost {
+				globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if replay == nil {
+				globalError(w, http.StatusServiceUnavailable, "manual trigger unavailable")
+				return
+			}
+			record, err := store.GetInboundEvent(r.Context(), id)
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "event not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to load event")
+				return
+			}
+			deliveryID := fmt.Sprintf("replay-%d", time.Now().UnixNano())
+			replay(r.Context(), eventFromInboundRecord(*record, deliveryID))
+			writeJSON(w, http.StatusAccepted, map[string]string{
+				"delivery_id": deliveryID,
+				"status":      "accepted",
+			})
+			return
+		}
+
+		globalError(w, http.StatusNotFound, "not found")
+	}
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────────

@@ -36,6 +36,7 @@ type workflowActionConfig struct {
 	ProjectEvent   *projectEventActionConfig   `json:"project_event,omitempty"`
 	Result         resultEvaluationConfig      `json:"result,omitempty"`
 	Response       responseHandlingConfig      `json:"response,omitempty"`
+	Retry          workflowRetryConfig         `json:"retry,omitempty"`
 	PostActions    []workflowPostActionConfig  `json:"post_actions,omitempty"`
 }
 
@@ -72,6 +73,11 @@ type responseHandlingConfig struct {
 	Mode    string `json:"mode,omitempty"`
 	Path    string `json:"path,omitempty"`
 	Capture string `json:"capture,omitempty"`
+}
+
+type workflowRetryConfig struct {
+	MaxAttempts    int64 `json:"max_attempts,omitempty"`
+	BackoffSeconds int64 `json:"backoff_seconds,omitempty"`
 }
 
 type workflowPostActionConfig struct {
@@ -123,6 +129,8 @@ type workflowStepRequest struct {
 	PostTimeoutSeconds  intish  `json:"post_timeout_seconds"`
 	ContinueOnError     boolish `json:"continue_on_error"`
 	TimeoutSeconds      intish  `json:"timeout_seconds"`
+	RetryAttempts       intish  `json:"retry_attempts"`
+	RetryBackoffSeconds intish  `json:"retry_backoff_seconds"`
 }
 
 type workflowStepConfig struct {
@@ -145,6 +153,8 @@ type workflowStepConfig struct {
 	ResponseMode        string `json:"response_mode"`
 	ResponsePath        string `json:"response_path,omitempty"`
 	ResponseCapture     string `json:"response_capture,omitempty"`
+	RetryAttempts       int64  `json:"retry_attempts,omitempty"`
+	RetryBackoffSeconds int64  `json:"retry_backoff_seconds,omitempty"`
 	PostActionName      string `json:"post_action_name,omitempty"`
 	PostActionType      string `json:"post_action_type,omitempty"`
 	PostCommand         string `json:"post_command,omitempty"`
@@ -307,17 +317,19 @@ func workflowStepConfigFromNode(node WorkflowNode) workflowStepConfig {
 	cfg := workflowActionConfigFromNode(node)
 	stepType := normalizeActionType(node.Type)
 	step := workflowStepConfig{
-		NodeKey:          node.NodeKey,
-		Name:             node.Name,
-		Type:             stepType,
-		TypeLabel:        workflowActionLabel(stepType),
-		Command:          node.Command,
-		ResponseMode:     responseModeOrDefault(cfg.Response.Mode),
-		ResponsePath:     cfg.Response.Path,
-		ResponseCapture:  firstNonEmpty(cfg.Response.Capture, node.Capture),
-		ContinueOnError:  node.ContinueOnError,
-		TimeoutSeconds:   node.TimeoutSeconds,
-		PostActionsCount: len(cfg.PostActions),
+		NodeKey:             node.NodeKey,
+		Name:                node.Name,
+		Type:                stepType,
+		TypeLabel:           workflowActionLabel(stepType),
+		Command:             node.Command,
+		ResponseMode:        responseModeOrDefault(cfg.Response.Mode),
+		ResponsePath:        cfg.Response.Path,
+		ResponseCapture:     firstNonEmpty(cfg.Response.Capture, node.Capture),
+		RetryAttempts:       retryAttempts(cfg),
+		RetryBackoffSeconds: cfg.Retry.BackoffSeconds,
+		ContinueOnError:     node.ContinueOnError,
+		TimeoutSeconds:      node.TimeoutSeconds,
+		PostActionsCount:    len(cfg.PostActions),
 	}
 	if len(cfg.PostActions) > 0 {
 		applyPostActionToStepConfig(&step, cfg.PostActions[0])
@@ -462,6 +474,10 @@ func workflowNodeFromStepRequest(req workflowStepRequest, index int, existing *W
 			Mode:    responseModeOrDefault(req.ResponseMode),
 			Path:    strings.TrimSpace(req.ResponsePath),
 			Capture: strings.TrimSpace(req.ResponseCapture),
+		},
+		Retry: workflowRetryConfig{
+			MaxAttempts:    req.RetryAttempts.Int64(),
+			BackoffSeconds: req.RetryBackoffSeconds.Int64(),
 		},
 	}
 
@@ -618,6 +634,9 @@ func validateWorkflowNode(node WorkflowNode) error {
 	default:
 		return fmt.Errorf("node %q has unsupported response mode %q", node.NodeKey, cfg.Response.Mode)
 	}
+	if err := validateWorkflowRetry(node.NodeKey, cfg.Retry); err != nil {
+		return err
+	}
 
 	switch node.Type {
 	case WorkflowActionRunCommand:
@@ -748,8 +767,32 @@ func validateWorkflowPostAction(nodeKey string, index int, post workflowPostActi
 }
 
 func runWorkflowAction(ctx context.Context, repoPath string, event protocol.EventMsg, step DAGStep, rc *RunContext, replay ReplayDispatcher) NodeResult {
-	actionType := normalizeActionType(step.Type)
 	cfg := workflowActionConfigFromStep(step)
+	attempts := retryAttempts(cfg)
+	backoff := retryBackoff(cfg)
+	var last NodeResult
+	for attempt := int64(1); attempt <= attempts; attempt++ {
+		last = runWorkflowActionOnce(ctx, repoPath, event, step, rc, cfg, replay)
+		if last.State == NodeStateSuccess || attempt == attempts {
+			if last.State == NodeStateFailure && attempts > 1 {
+				last.Output = trimString(fmt.Sprintf("attempt %d/%d failed\n%s", attempt, attempts, last.Output), maxNodeOutputBytes)
+			}
+			return last
+		}
+		if backoff <= 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return NodeResult{Key: step.Key, State: NodeStateFailure, ExitCode: 1, Output: trimString(ctx.Err().Error(), maxNodeOutputBytes)}
+		case <-time.After(backoff):
+		}
+	}
+	return last
+}
+
+func runWorkflowActionOnce(ctx context.Context, repoPath string, event protocol.EventMsg, step DAGStep, rc *RunContext, cfg workflowActionConfig, replay ReplayDispatcher) NodeResult {
+	actionType := normalizeActionType(step.Type)
 
 	action, err := executeWorkflowAction(ctx, repoPath, event, step, rc, cfg, replay)
 	if err != nil {
@@ -774,6 +817,36 @@ func runWorkflowAction(ctx context.Context, repoPath string, event protocol.Even
 		return NodeResult{Key: step.Key, State: NodeStateFailure, ExitCode: 1, Output: trimString(err.Error(), maxNodeOutputBytes)}
 	}
 	return NodeResult{Key: step.Key, State: NodeStateSuccess, ExitCode: 0, Output: trimString(strings.TrimSpace(output), maxNodeOutputBytes)}
+}
+
+func validateWorkflowRetry(nodeKey string, retry workflowRetryConfig) error {
+	if retry.MaxAttempts < 0 {
+		return fmt.Errorf("node %q retry attempts must be zero or greater", nodeKey)
+	}
+	if retry.MaxAttempts > 10 {
+		return fmt.Errorf("node %q retry attempts cannot exceed 10", nodeKey)
+	}
+	if retry.BackoffSeconds < 0 {
+		return fmt.Errorf("node %q retry backoff must be zero or greater", nodeKey)
+	}
+	if retry.BackoffSeconds > 3600 {
+		return fmt.Errorf("node %q retry backoff cannot exceed 3600 seconds", nodeKey)
+	}
+	return nil
+}
+
+func retryAttempts(cfg workflowActionConfig) int64 {
+	if cfg.Retry.MaxAttempts <= 0 {
+		return 1
+	}
+	return cfg.Retry.MaxAttempts
+}
+
+func retryBackoff(cfg workflowActionConfig) time.Duration {
+	if cfg.Retry.BackoffSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(cfg.Retry.BackoffSeconds) * time.Second
 }
 
 func executeWorkflowAction(ctx context.Context, repoPath string, event protocol.EventMsg, step DAGStep, rc *RunContext, cfg workflowActionConfig, replay ReplayDispatcher) (workflowActionResult, error) {

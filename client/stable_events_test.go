@@ -67,6 +67,31 @@ func TestNormalizeInboundEventCanResolveWorkflowByStableEvent(t *testing.T) {
 	}
 }
 
+func TestNormalizeInboundEventUsesDefaultBitbucketMappings(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+
+	event, normalized, err := NormalizeInboundEvent(ctx, store, protocol.EventMsg{
+		DeliveryID:     "delivery-bitbucket-1",
+		Provider:       "bitbucket",
+		GitHubEvent:    "repo.push",
+		ExternalEvent:  "repo.push",
+		ExternalAction: "tag",
+		Repo:           "nitecon/eventic",
+		Ref:            "refs/tags/v1.2.3",
+		Payload:        json.RawMessage(`{"push":{"changes":[{"new":{"type":"tag","name":"v1.2.3"}}]}}`),
+	})
+	if err != nil {
+		t.Fatalf("normalize bitbucket event: %v", err)
+	}
+	if event.StableEvent != StableEventArtifactPublished {
+		t.Fatalf("expected %s, got %q", StableEventArtifactPublished, event.StableEvent)
+	}
+	if normalized.MappingStatus != "matched" || normalized.MappingID == "" {
+		t.Fatalf("expected matched mapping trace, got %#v", normalized)
+	}
+}
+
 func TestEventMappingMatchesBodyArrayCondition(t *testing.T) {
 	event := protocol.EventMsg{
 		Provider:    "custom",
@@ -82,6 +107,55 @@ func TestEventMappingMatchesBodyArrayCondition(t *testing.T) {
 
 	if !mappingMatchesEvent(mapping, event) {
 		t.Fatal("expected array condition to match")
+	}
+}
+
+func TestInboundEventAuditRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+
+	event := protocol.EventMsg{
+		DeliveryID:     "audit-1",
+		Provider:       "prometheus",
+		GitHubEvent:    "alert",
+		ExternalEvent:  "alert",
+		ExternalAction: "firing",
+		Repo:           "nitecon/eventic",
+		Ref:            "refs/heads/main",
+		Sender:         "HighErrorRate",
+		Message:        "error rate high",
+		Metadata:       map[string]string{"severity": "CRITICAL", "cluster": "prod"},
+		Payload:        json.RawMessage(`{"status":"firing"}`),
+	}
+	event, normalized, err := NormalizeInboundEvent(ctx, store, event)
+	if err != nil {
+		t.Fatalf("normalize audit event: %v", err)
+	}
+	if err := store.RecordInboundEvent(ctx, event, normalized); err != nil {
+		t.Fatalf("record inbound event: %v", err)
+	}
+	if err := store.FinishInboundEvent(ctx, event.DeliveryID, "failure", "node failed"); err != nil {
+		t.Fatalf("finish inbound event: %v", err)
+	}
+
+	records, err := store.ListInboundEvents(ctx, InboundEventFilter{Repo: "nitecon/eventic", Limit: 10})
+	if err != nil {
+		t.Fatalf("list inbound events: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	record := records[0]
+	if record.StableEvent != StableEventSystemFailure || record.MappingStatus != "matched" {
+		t.Fatalf("unexpected mapping audit: %#v", record)
+	}
+	if record.State != "failure" || record.Description != "node failed" || record.Severity != "CRITICAL" {
+		t.Fatalf("unexpected audit state: %#v", record)
+	}
+
+	replay := eventFromInboundRecord(record, "replay-1")
+	if replay.DeliveryID != "replay-1" || replay.StableEvent != StableEventSystemFailure || replay.Repo != "nitecon/eventic" {
+		t.Fatalf("unexpected replay event: %#v", replay)
 	}
 }
 

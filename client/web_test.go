@@ -87,7 +87,7 @@ func TestWebMuxRoutePatternsDoNotConflict(t *testing.T) {
 	defer store.Close()
 
 	mux := webMux(Config{}, NewExecutionLog(WebConfig{}), store, func(context.Context, protocol.EventMsg) {})
-	for _, path := range []string{"/", "/global", "/global/events", "/global/mappings", "/global/mappings/advanced", "/api/projects"} {
+	for _, path := range []string{"/", "/global", "/global/events", "/global/mappings", "/global/mappings/advanced", "/global/events/history", "/api/projects"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -733,7 +733,7 @@ func TestEventMappingsAPIGeneratesUUIDMappingID(t *testing.T) {
 	}
 	originalMappingID := mapping.MappingID
 
-	update := `{"provider":"github","name":"Updated push","enabled":true,"priority":60,"conditions":{"event":"push","ref":"refs/heads/main"},"target_stable_event":"artifact.initiate"}`
+	update := `{"provider":"github","name":"Updated push","enabled":true,"priority":60,"conditions":{"event":"push","ref":"refs/heads/develop"},"target_stable_event":"artifact.initiate"}`
 	rec = httptest.NewRecorder()
 	eventMappingItemHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/event-mappings/%d", mapping.ID), strings.NewReader(update)))
 	if rec.Code != http.StatusOK {
@@ -744,6 +744,75 @@ func TestEventMappingsAPIGeneratesUUIDMappingID(t *testing.T) {
 	}
 	if mapping.MappingID != originalMappingID {
 		t.Fatalf("expected update to preserve mapping_id %q, got %q", originalMappingID, mapping.MappingID)
+	}
+}
+
+func TestEventMappingsAPIRejectsDuplicateMapping(t *testing.T) {
+	store := newTestStore(t)
+	body := `{"provider":"custom","name":"Catch all","enabled":true,"priority":1,"conditions":{"event":"*"},"target_stable_event":"communication.received"}`
+
+	rec := httptest.NewRecorder()
+	eventMappingsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/event-mappings", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected first mapping 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	eventMappingsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/event-mappings", strings.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate mapping 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInboundEventsAPIListsAndReplays(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+	event := protocol.EventMsg{
+		DeliveryID:     "api-event-1",
+		Provider:       "custom",
+		GitHubEvent:    "comms",
+		ExternalEvent:  "comms",
+		ExternalAction: "notify",
+		Repo:           "nitecon/eventic",
+		Ref:            "refs/heads/main",
+		Sender:         "agent",
+		Message:        "hello",
+		Payload:        json.RawMessage(`{"repo":"nitecon/eventic","message":"hello"}`),
+	}
+	event, normalized, err := NormalizeInboundEvent(ctx, store, event)
+	if err != nil {
+		t.Fatalf("normalize event: %v", err)
+	}
+	if err := store.RecordInboundEvent(ctx, event, normalized); err != nil {
+		t.Fatalf("record inbound event: %v", err)
+	}
+	if err := store.FinishInboundEvent(ctx, event.DeliveryID, "success", ""); err != nil {
+		t.Fatalf("finish inbound event: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	inboundEventsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/events?repo=nitecon/eventic", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var records []InboundEventRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &records); err != nil {
+		t.Fatalf("decode inbound events: %v", err)
+	}
+	if len(records) != 1 || records[0].StableEvent != StableEventCommunicationReceived {
+		t.Fatalf("unexpected inbound events: %#v", records)
+	}
+
+	var replayed protocol.EventMsg
+	rec = httptest.NewRecorder()
+	inboundEventItemHandler(store, func(ctx context.Context, event protocol.EventMsg) {
+		replayed = event
+	}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/events/%d/replay", records[0].ID), nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.HasPrefix(replayed.DeliveryID, "replay-") || replayed.Repo != "nitecon/eventic" || replayed.StableEvent != StableEventCommunicationReceived {
+		t.Fatalf("unexpected replay event: %#v", replayed)
 	}
 }
 

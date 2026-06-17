@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nitecon/eventic/protocol"
@@ -54,6 +55,49 @@ func TestTypedHTTPRequestCapturesResponsePath(t *testing.T) {
 	}
 	if rc.Vars["TOKEN"] != "abc123" {
 		t.Fatalf("captured TOKEN = %q, want abc123", rc.Vars["TOKEN"])
+	}
+}
+
+func TestTypedHTTPRequestRetriesTransientFailure(t *testing.T) {
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`try again`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`ok`))
+	}))
+	defer srv.Close()
+
+	node, msg := workflowNodeFromStepRequest(workflowStepRequest{
+		Name:           "Retry HTTP",
+		ActionType:     WorkflowActionHTTPRequest,
+		HTTPMethod:     http.MethodGet,
+		HTTPURL:        srv.URL,
+		ResultStatuses: "200",
+		RetryAttempts:  2,
+	}, 1, nil)
+	if msg != "" {
+		t.Fatalf("build node: %s", msg)
+	}
+	graph := graphFrom(t, []WorkflowNode{node}, nil)
+	runner := newNodeRunner(t.TempDir(), protocol.EventMsg{
+		DeliveryID:  "delivery-1",
+		GitHubEvent: "push",
+		Repo:        "nitecon/eventic",
+	}, nil)
+
+	results, err := Execute(context.Background(), graph, &RunContext{Vars: map[string]string{}}, runner, 1)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got := resultState(results, node.NodeKey); got != NodeStateSuccess {
+		t.Fatalf("expected retried http node success, got %q (%#v)", got, results)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts.Load())
 	}
 }
 

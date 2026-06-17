@@ -42,7 +42,14 @@ type StableEventDefinition struct {
 type NormalizedEvent struct {
 	ID                  string            `json:"id"`
 	Source              string            `json:"source"`
+	Repo                string            `json:"repo,omitempty"`
+	Ref                 string            `json:"ref,omitempty"`
+	ExternalEvent       string            `json:"external_event,omitempty"`
+	ExternalAction      string            `json:"external_action,omitempty"`
 	StableEvent         string            `json:"stable_event"`
+	MappingID           string            `json:"mapping_id,omitempty"`
+	MappingName         string            `json:"mapping_name,omitempty"`
+	MappingStatus       string            `json:"mapping_status"`
 	Timestamp           time.Time         `json:"timestamp"`
 	Actor               string            `json:"actor,omitempty"`
 	Metadata            map[string]string `json:"metadata,omitempty"`
@@ -130,22 +137,39 @@ func NormalizeInboundEvent(ctx context.Context, store *ProjectStore, event proto
 	}
 
 	stableEvent := strings.TrimSpace(event.StableEvent)
+	mappingStatus := "unmatched"
+	var matchedMapping *EventMapping
+	if stableEvent != "" {
+		mappingStatus = "direct"
+	}
 	if stableEvent == "" && store != nil {
 		mappings, err := store.ListEventMappings(ctx)
 		if err != nil {
 			return event, NormalizedEvent{}, err
 		}
-		stableEvent = resolveStableEventFromMappings(event, mappings)
+		stableEvent, matchedMapping = resolveStableEventFromMappings(event, mappings)
+		if stableEvent != "" {
+			mappingStatus = "matched"
+		}
 	}
 	event.StableEvent = stableEvent
 
 	normalized := NormalizedEvent{
-		ID:          event.DeliveryID,
-		Source:      event.Provider,
-		StableEvent: stableEvent,
-		Timestamp:   time.Now().UTC(),
-		Actor:       event.Sender,
-		Metadata:    event.Metadata,
+		ID:             event.DeliveryID,
+		Source:         event.Provider,
+		Repo:           event.Repo,
+		Ref:            event.Ref,
+		ExternalEvent:  firstNonEmpty(event.ExternalEvent, event.GitHubEvent),
+		ExternalAction: firstNonEmpty(event.ExternalAction, event.Action),
+		StableEvent:    stableEvent,
+		MappingStatus:  mappingStatus,
+		Timestamp:      time.Now().UTC(),
+		Actor:          event.Sender,
+		Metadata:       event.Metadata,
+	}
+	if matchedMapping != nil {
+		normalized.MappingID = matchedMapping.MappingID
+		normalized.MappingName = matchedMapping.Name
 	}
 	if event.DeliveryID != "" && len(event.Payload) > 0 {
 		normalized.RawPayloadReference = "eventic://payload/" + event.DeliveryID
@@ -204,7 +228,17 @@ func eventMetadata(event protocol.EventMsg) map[string]string {
 			metadata["target_environment"] = "production"
 		}
 	}
-	if sha := firstJSONPath(event.Payload, "after", "head_commit.id", "workflow_run.head_sha"); sha != "" {
+	if sha := firstJSONPath(event.Payload,
+		"after",
+		"head_commit.id",
+		"workflow_run.head_sha",
+		"checkout_sha",
+		"object_attributes.sha",
+		"object_attributes.last_commit.id",
+		"push.changes[].new.target.hash",
+		"commit_status.commit.hash",
+		"commit.hash",
+	); sha != "" {
 		metadata["commit_sha"] = sha
 	}
 	if severity := firstJSONPath(event.Payload,
@@ -213,23 +247,32 @@ func eventMetadata(event protocol.EventMsg) map[string]string {
 		"commonLabels.severity",
 		"alerts[].labels.severity",
 		"vulnerabilities[].severity",
+		"vulnerability.severity",
+		"finding.severity",
+		"alert.rule.severity",
 		"severity",
 	); severity != "" {
 		metadata["severity"] = strings.ToUpper(severity)
 	}
+	for _, key := range []string{"alertname", "cluster", "namespace", "service", "environment"} {
+		if value := firstJSONPath(event.Payload, "commonLabels."+key, "alerts[].labels."+key, "labels."+key); value != "" {
+			metadata[key] = value
+		}
+	}
 	return metadata
 }
 
-func resolveStableEventFromMappings(event protocol.EventMsg, mappings []EventMapping) string {
+func resolveStableEventFromMappings(event protocol.EventMsg, mappings []EventMapping) (string, *EventMapping) {
 	for _, mapping := range mappings {
 		if !mapping.Enabled || strings.TrimSpace(mapping.TargetStableEvent) == "" {
 			continue
 		}
 		if mappingMatchesEvent(mapping, event) {
-			return mapping.TargetStableEvent
+			matched := mapping
+			return mapping.TargetStableEvent, &matched
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func mappingMatchesEvent(mapping EventMapping, event protocol.EventMsg) bool {

@@ -29,6 +29,8 @@ A workflow is bound to one `(scope, repo, event_type)` slot and contains:
 | `capture` | When set, the node's trimmed stdout is stored under this variable name and exported to downstream nodes as `NAME=value` |
 | `continue_on_error` | When `true`, a failure here does not fail the overall run and downstream `success` edges still see the node as failed |
 | `timeout_seconds` | Per-node timeout (0 = no explicit timeout) |
+| `config.retry.max_attempts` | Total attempts for transient step failures (default `1`, max `10`) |
+| `config.retry.backoff_seconds` | Wait between failed attempts before the next retry (default `0`, max `3600`) |
 | `pos_x` / `pos_y` | Editor canvas coordinates (UI only) |
 | `config` | Typed action JSON: HTTP request settings, project message/event settings, status/exit-code evaluation, response handling, and post actions |
 
@@ -123,17 +125,26 @@ The first enabled match wins. If nothing matches, the event is recorded as
 `skipped`. A repo defining its own workflow for an event opts **out** of the
 global workflow for that event (no composition in v1).
 
-Default stable mappings include GitHub `push` on `refs/heads/main` to
-`artifact.initiate`, GitHub `release.published` to `artifact.published`,
-failed GitHub `workflow_run` and Prometheus firing alerts to `system.failure`,
-GitHub `dependabot_alert.created` and critical scan findings to
-`security.alarm`, and `comms` to `communication.received`. Edit mappings from
+Default stable mappings include GitHub/GitLab/Bitbucket main-branch pushes to
+`artifact.initiate`, GitHub releases and GitLab/Bitbucket tag pushes to
+`artifact.published`, failed GitHub workflow runs, GitLab pipelines,
+Bitbucket commit statuses, and Prometheus firing alerts to `system.failure`,
+GitHub Dependabot/code-scanning/security-advisory events, GitLab
+vulnerabilities, and critical scan findings to `security.alarm`, and `comms`
+or Discord adapter commands to `communication.received`. Edit mappings from
 `/global` or the `/api/event-mappings` API. `/global` also exposes a visual
 mapper: drag provider events from the left column onto stable events in the
 right column to create mappings. Stable events live in a global registry and
 can be created with custom keys such as `catchall`, `published`, or
 `security.alarm`. Use provider `*` for mappings that should apply to any
-inbound provider.
+inbound provider. Duplicate mappings with the same provider, stable event, and
+condition set are rejected.
+
+Every normalized inbound event is also written to the `inbound_events` audit
+table. The `/global/events/history` page and `GET /api/events` show the
+provider event, stable event, mapping status/id, severity metadata, final
+state, and bounded raw payload. `POST /api/events/{id}/replay` replays the
+recorded normalized event through the same dispatcher.
 
 External systems that already know the intended internal event can call
 `POST /event/{stable_event}` with Bearer-token auth and a JSON body containing
