@@ -247,10 +247,6 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		`id="event-mapper"`,
 		`id="stable-events-management"`,
 		`id="event-mappings"`,
-		`draggable="true"
-                         data-eventic-provider-event`,
-		`<div class="nd-well"
-                     data-eventic-drop-zone`,
 		`<select id="provider-event-filter" data-eventic-provider-filter>`,
 		`data-eventic-action="POST /api/stable-events"`,
 	} {
@@ -289,10 +285,6 @@ func TestConfigurationTemplateStableEventsPage(t *testing.T) {
 		`id="workflow-configuration"`,
 		`id="event-mapper"`,
 		`id="event-mappings"`,
-		`draggable="true"
-                         data-eventic-provider-event`,
-		`<div class="nd-well"
-                     data-eventic-drop-zone`,
 	} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("expected stable events page not to contain %q", unwanted)
@@ -315,12 +307,12 @@ func TestConfigurationTemplateVisualMapperPage(t *testing.T) {
 	for _, expected := range []string{
 		"Event Mapper",
 		`id="event-mapper"`,
+		`class="nd-row nd-mb-lg"`,
+		`class="nd-col-6"`,
 		`id="provider-events"`,
 		`id="stable-event-targets"`,
-		`draggable="true"
-                         data-eventic-provider-event`,
-		`<div class="nd-well"
-                     data-eventic-drop-zone`,
+		`data-eventic-provider-event`,
+		`data-eventic-drop-zone`,
 		`data-eventic-provider-filter`,
 		`href="/global/events"`,
 		`href="/global/mappings/advanced"`,
@@ -334,6 +326,8 @@ func TestConfigurationTemplateVisualMapperPage(t *testing.T) {
 		`id="workflow-configuration"`,
 		`id="stable-events-management"`,
 		`id="event-mappings"`,
+		`class="nd-grid nd-grid-2">
+            <section class="nd-panel" id="provider-events"`,
 		`data-eventic-action="POST /api/stable-events"`,
 		`data-eventic-action="PUT /api/stable-events/`,
 	} {

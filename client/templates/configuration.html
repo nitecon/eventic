@@ -211,94 +211,98 @@
           <header class="nd-panel-header">
             <h2>Event Mapper</h2>
           </header>
-          <div class="nd-grid nd-grid-2">
-            <section class="nd-panel" id="provider-events">
-              <header class="nd-panel-header">
-                <h3>Provider Events</h3>
-              </header>
-              <div class="nd-form-group">
-                <label for="provider-event-filter">Provider</label>
-                <select id="provider-event-filter" data-eventic-provider-filter>
-                  [[ range .ProviderTypes ]]
-                  <option value="[[ .Value ]]">[[ .Label ]]</option>
-                  [[ end ]]
-                </select>
-              </div>
-              <div data-eventic-provider-list>
-                [[ range .ProviderEvents ]]
-                <article class="nd-card"
-                         draggable="true"
-                         data-eventic-provider-event
-                         data-provider="[[ .Provider ]]"
-                         data-event-name="[[ .Event ]]"
-                         data-event-label="[[ .Label ]]"
-                         data-conditions="[[ .ConditionsJSON ]]">
-                  <header class="nd-card-header">
-                    <h4 class="nd-card-title">[[ .Label ]]</h4>
-                    <span class="nd-badge nd-badge-info">[[ .Provider ]]</span>
-                  </header>
-                  <div class="nd-card-body">
-                    <p>[[ .Description ]]</p>
-                    <pre><code>[[ .ConditionsText ]]</code></pre>
-                  </div>
-                </article>
-                [[ end ]]
-              </div>
-            </section>
-
-            <section class="nd-panel" id="stable-event-targets">
-              <header class="nd-panel-header">
-                <h3>Stable Events</h3>
-              </header>
-              [[ range .StableGroups ]]
-              <section class="nd-panel">
+          <div class="nd-row nd-mb-lg">
+            <div class="nd-col-6">
+              <section class="nd-panel" id="provider-events">
                 <header class="nd-panel-header">
-                  <h4>[[ .Group ]]</h4>
+                  <h3>Provider Events</h3>
                 </header>
-                [[ range .Events ]]
-                <div class="nd-well"
-                     data-eventic-drop-zone
-                     data-stable-event="[[ .Event ]]">
-                  <header class="nd-card-header">
-                    <h5 class="nd-card-title">[[ .Title ]]</h5>
-                    <span class="nd-badge nd-badge-info">[[ .Event ]]</span>
-                  </header>
-                  [[ if .Description ]]
-                  <p>[[ .Description ]]</p>
-                  [[ end ]]
-                  [[ if .Mappings ]]
-                  <table class="nd-table-striped nd-table-hover">
-                    <thead>
-                      <tr>
-                        <th>Mapped Provider</th>
-                        <th>Name</th>
-                        <th>Priority</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      [[ range .Mappings ]]
-                      <tr>
-                        <td>[[ .Provider ]]</td>
-                        <td>[[ .Name ]]</td>
-                        <td>[[ .Priority ]]</td>
-                        <td>
-                          <button type="button"
-                                  class="nd-btn-danger nd-btn-sm"
-                                  data-eventic-delete="DELETE /api/event-mappings/[[ .ID ]]">Remove</button>
-                        </td>
-                      </tr>
-                      [[ end ]]
-                    </tbody>
-                  </table>
-                  [[ else ]]
-                  <p data-eventic-empty-drop>No provider events mapped.</p>
+                <div class="nd-form-group">
+                  <label for="provider-event-filter">Provider</label>
+                  <select id="provider-event-filter" data-eventic-provider-filter>
+                    [[ range .ProviderTypes ]]
+                    <option value="[[ .Value ]]">[[ .Label ]]</option>
+                    [[ end ]]
+                  </select>
+                </div>
+                <div data-eventic-provider-list>
+                  [[ range .ProviderEvents ]]
+                  <article class="nd-card"
+                           draggable="true"
+                           data-eventic-provider-event
+                           data-provider="[[ .Provider ]]"
+                           data-event-name="[[ .Event ]]"
+                           data-event-label="[[ .Label ]]"
+                           data-conditions="[[ .ConditionsJSON ]]">
+                    <header class="nd-card-header">
+                      <h4 class="nd-card-title">[[ .Label ]]</h4>
+                      <span class="nd-badge nd-badge-info">[[ .Provider ]]</span>
+                    </header>
+                    <div class="nd-card-body">
+                      <p>[[ .Description ]]</p>
+                      <pre><code>[[ .ConditionsText ]]</code></pre>
+                    </div>
+                  </article>
                   [[ end ]]
                 </div>
+              </section>
+            </div>
+
+            <div class="nd-col-6">
+              <section class="nd-panel" id="stable-event-targets">
+                <header class="nd-panel-header">
+                  <h3>Stable Events</h3>
+                </header>
+                [[ range .StableGroups ]]
+                <section class="nd-panel">
+                  <header class="nd-panel-header">
+                    <h4>[[ .Group ]]</h4>
+                  </header>
+                  [[ range .Events ]]
+                  <div class="nd-well"
+                       data-eventic-drop-zone
+                       data-stable-event="[[ .Event ]]">
+                    <header class="nd-card-header">
+                      <h5 class="nd-card-title">[[ .Title ]]</h5>
+                      <span class="nd-badge nd-badge-info">[[ .Event ]]</span>
+                    </header>
+                    [[ if .Description ]]
+                    <p>[[ .Description ]]</p>
+                    [[ end ]]
+                    [[ if .Mappings ]]
+                    <table class="nd-table-striped nd-table-hover">
+                      <thead>
+                        <tr>
+                          <th>Mapped Provider</th>
+                          <th>Name</th>
+                          <th>Priority</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        [[ range .Mappings ]]
+                        <tr>
+                          <td>[[ .Provider ]]</td>
+                          <td>[[ .Name ]]</td>
+                          <td>[[ .Priority ]]</td>
+                          <td>
+                            <button type="button"
+                                    class="nd-btn-danger nd-btn-sm"
+                                    data-eventic-delete="DELETE /api/event-mappings/[[ .ID ]]">Remove</button>
+                          </td>
+                        </tr>
+                        [[ end ]]
+                      </tbody>
+                    </table>
+                    [[ else ]]
+                    <p data-eventic-empty-drop>No provider events mapped.</p>
+                    [[ end ]]
+                  </div>
+                  [[ end ]]
+                </section>
                 [[ end ]]
               </section>
-              [[ end ]]
-            </section>
+            </div>
           </div>
         </section>
         [[ end ]]
