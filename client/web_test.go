@@ -595,7 +595,7 @@ func TestWorkflowItemRejectsBadID(t *testing.T) {
 
 func TestEventTypesHandlerIncludesComms(t *testing.T) {
 	rec := httptest.NewRecorder()
-	eventTypesHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/event-types", nil))
+	eventTypesHandler(nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/event-types", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
@@ -624,6 +624,62 @@ func TestEventTypesHandlerIncludesComms(t *testing.T) {
 	}
 	if !hasPush {
 		t.Fatal("expected push in event types")
+	}
+}
+
+func TestStableEventsAPICreatesCustomEvent(t *testing.T) {
+	store := newTestStore(t)
+	body := `{"event":"catchall","title":"Catch All","group":"Custom","description":"Route any unmatched event","enabled":true}`
+	rec := httptest.NewRecorder()
+	stableEventsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/stable-events", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var stableEvent StableEventDefinition
+	if err := json.Unmarshal(rec.Body.Bytes(), &stableEvent); err != nil {
+		t.Fatalf("decode stable event: %v", err)
+	}
+	if stableEvent.Event != "catchall" || stableEvent.ID == 0 {
+		t.Fatalf("unexpected stable event: %#v", stableEvent)
+	}
+
+	rec = httptest.NewRecorder()
+	stableEventsCollectionHandler(store).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stable-events", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var stableEvents []StableEventDefinition
+	if err := json.Unmarshal(rec.Body.Bytes(), &stableEvents); err != nil {
+		t.Fatalf("decode stable events: %v", err)
+	}
+	var found bool
+	for _, event := range stableEvents {
+		if event.Event == "catchall" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected custom stable event in list")
+	}
+}
+
+func TestProviderEventsAPIFiltersProvider(t *testing.T) {
+	rec := httptest.NewRecorder()
+	providerEventsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/provider-events?provider=prometheus", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var events []ProviderEvent
+	if err := json.Unmarshal(rec.Body.Bytes(), &events); err != nil {
+		t.Fatalf("decode provider events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected prometheus provider events")
+	}
+	for _, event := range events {
+		if event.Provider != "prometheus" {
+			t.Fatalf("expected prometheus event only, got %#v", event)
+		}
 	}
 }
 

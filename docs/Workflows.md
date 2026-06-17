@@ -128,8 +128,17 @@ Default stable mappings include GitHub `push` on `refs/heads/main` to
 failed GitHub `workflow_run` and Prometheus firing alerts to `system.failure`,
 GitHub `dependabot_alert.created` and critical scan findings to
 `security.alarm`, and `comms` to `communication.received`. Edit mappings from
-`/global` or the `/api/event-mappings` API. Use provider `*` for mappings that
-should apply to any inbound provider.
+`/global` or the `/api/event-mappings` API. `/global` also exposes a visual
+mapper: drag provider events from the left column onto stable events in the
+right column to create mappings. Stable events live in a global registry and
+can be created with custom keys such as `catchall`, `published`, or
+`security.alarm`. Use provider `*` for mappings that should apply to any
+inbound provider.
+
+External systems that already know the intended internal event can call
+`POST /event/{stable_event}` with Bearer-token auth and a JSON body containing
+`repo`, optional `ref`, `title`, `body`, `action`, `sender`, and `metadata`.
+That ingress sets `StableEvent` directly and bypasses provider mapping.
 
 ## Parallelism
 

@@ -219,6 +219,16 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		"Test",
 		"make test",
 		`data-eventic-action="POST /api/workflow-config?scope=global"`,
+		`id="repo-nav-list"`,
+		`href="/nitecon/alpha"`,
+		`href="/nitecon/beta"`,
+		`id="event-mapper"`,
+		`data-eventic-provider-event`,
+		`data-eventic-drop-zone`,
+		`data-eventic-provider-filter`,
+		`data-eventic-action="POST /api/stable-events"`,
+		`for="workflow-continue-on-error"`,
+		`id="workflow-continue-on-error" type="checkbox"`,
 		`name="action_type"`,
 		`name="response_mode"`,
 		`href="/global" class="nd-active">Configuration</a>`,
@@ -234,6 +244,8 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		"Post Action Name",
 		"Action Type",
 		`id="workflow-step-name"`,
+		`class="nd-checkbox"`,
+		`<span class="nd-nav-section">Navigation</span>`,
 	} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("expected global configuration page not to contain redundant label %q", unwanted)

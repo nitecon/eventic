@@ -9,8 +9,11 @@
   <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
   <meta name="nd-theme" content="dark" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/dark.min.css">
   <meta name="endpoint:workflow-config" content="/api/workflow-config">
+  <meta name="endpoint:projects" content="/api/projects">
   <meta name="var:repo" content="[[ .Repo ]]">
   <meta name="var:scope" content="[[ .Scope ]]">
+  <meta name="var:org" content="[[ .DefaultOrg ]]">
+  <meta name="var:repoSearch" content="">
 </head>
 <body class="app-page">
   <div class="app-layout nd-h-screen nd-overflow-hidden">
@@ -18,10 +21,52 @@
       <div class="nd-nav-brand">
         <a href="/">Eventic</a>
       </div>
-      <span class="nd-nav-section">Navigation</span>
-      <ul class="nd-nav-menu">
-        <li><a href="/">Repositories</a></li>
+      <span class="nd-nav-section">Organization</span>
+      <div class="nd-form-group">
+        <label for="org-select">Organization</label>
+        <select id="org-select" data-nd-model="org">
+          [[ if .Orgs ]]
+          [[ range .Orgs ]]
+          <option value="[[ . ]]" [[ if eq . $.DefaultOrg ]]selected[[ end ]]>[[ . ]]</option>
+          [[ end ]]
+          [[ else ]]
+          <option value="nitecon" selected>nitecon</option>
+          [[ end ]]
+        </select>
+      </div>
+      <div class="nd-form-group">
+        <label for="repo-search">Search</label>
+        <input id="repo-search" type="search" data-nd-model="repoSearch" autocomplete="off">
+      </div>
+      <button type="button"
+              class="nd-btn-primary nd-btn-sm"
+              data-nd-set="org=${org}, repoSearch=${repoSearch}"
+              data-nd-success="refresh:#repo-nav-list">Apply</button>
+      <button type="button"
+              class="nd-btn-ghost nd-btn-sm"
+              data-nd-set="repoSearch=''"
+              data-nd-success="refresh:#repo-nav-list">Clear</button>
+
+      <span class="nd-nav-section">Repositories</span>
+      <ul class="nd-nav-menu"
+          id="repo-nav-list"
+          data-nd-bind="/api/projects?org=${org}&amp;search=${repoSearch}&amp;summary=1"
+          data-nd-template="repo-nav-row-tmpl"
+          data-nd-refresh="30000">
+        [[ range .Projects ]]
+        <li>
+          <a href="/[[ .Owner ]]/[[ .Name ]]"
+             [[ if eq .Repo $.Repo ]]class="nd-active"[[ end ]]
+             title="[[ .Repo ]]">[[ .Name ]]</a>
+        </li>
+        [[ end ]]
       </ul>
+      <template id="repo-nav-row-tmpl">
+        <li>
+          <a href="/{{owner}}/{{name}}"
+             title="{{repo}}">{{name}}</a>
+        </li>
+      </template>
     </nav>
 
     <div class="app-body">
@@ -67,43 +112,162 @@
         [[ end ]]
 
         [[ if .IsGlobal ]]
-        <section class="nd-panel" id="stable-events">
+        <datalist id="stable-event-options">
+          [[ range .StableEvents ]]
+          <option value="[[ .Event ]]">[[ .Title ]]</option>
+          [[ end ]]
+        </datalist>
+
+        <section class="nd-panel" id="event-mapper">
           <header class="nd-panel-header">
-            <h2>Stable Events</h2>
+            <h2>Event Mapper</h2>
           </header>
-          <article class="nd-card">
-            <div class="nd-card-body">
-              <table class="nd-table-striped nd-table-hover">
-                <thead>
-                  <tr>
-                    <th>Event</th>
-                    <th>Sources</th>
-                    <th>Workflow Uses</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  [[ range .StableEvents ]]
-                  <tr>
-                    <td><span class="nd-badge nd-badge-info">[[ .Event ]]</span></td>
-                    <td>[[ range $index, $source := .ExampleSources ]][[ if $index ]], [[ end ]][[ $source ]][[ end ]]</td>
-                    <td>[[ range $index, $use := .WorkflowUses ]][[ if $index ]], [[ end ]][[ $use ]][[ end ]]</td>
-                  </tr>
+          <div class="nd-grid nd-grid-2">
+            <section class="nd-panel" id="provider-events">
+              <header class="nd-panel-header">
+                <h3>Provider Events</h3>
+              </header>
+              <div class="nd-form-group">
+                <label for="provider-event-filter">Provider</label>
+                <select id="provider-event-filter" data-eventic-provider-filter>
+                  [[ range .ProviderTypes ]]
+                  <option value="[[ .Value ]]">[[ .Label ]]</option>
                   [[ end ]]
-                </tbody>
-              </table>
-            </div>
-          </article>
+                </select>
+              </div>
+              <div data-eventic-provider-list>
+                [[ range .ProviderEvents ]]
+                <article class="nd-card"
+                         draggable="true"
+                         data-eventic-provider-event
+                         data-provider="[[ .Provider ]]"
+                         data-event-name="[[ .Event ]]"
+                         data-event-label="[[ .Label ]]"
+                         data-conditions="[[ .ConditionsJSON ]]">
+                  <header class="nd-card-header">
+                    <h4 class="nd-card-title">[[ .Label ]]</h4>
+                    <span class="nd-badge nd-badge-info">[[ .Provider ]]</span>
+                  </header>
+                  <div class="nd-card-body">
+                    <p>[[ .Description ]]</p>
+                    <pre><code>[[ .ConditionsText ]]</code></pre>
+                  </div>
+                </article>
+                [[ end ]]
+              </div>
+            </section>
+
+            <section class="nd-panel" id="stable-event-targets">
+              <header class="nd-panel-header">
+                <h3>Stable Events</h3>
+              </header>
+              <form data-eventic-action="POST /api/stable-events">
+                <div class="nd-grid nd-grid-2">
+                  <div class="nd-form-group">
+                    <label for="stable-event-key">Event</label>
+                    <input id="stable-event-key" name="event" placeholder="catchall" required>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="stable-event-title">Title</label>
+                    <input id="stable-event-title" name="title" placeholder="Catch All" required>
+                  </div>
+                  <div class="nd-form-group">
+                    <label for="stable-event-group">Group</label>
+                    <input id="stable-event-group" name="group" value="Custom" required>
+                  </div>
+                </div>
+                <div class="nd-form-group">
+                  <label for="stable-event-description">Description</label>
+                  <textarea id="stable-event-description" name="description" rows="3"></textarea>
+                </div>
+                <div class="nd-form-group">
+                  <label for="stable-event-enabled">Enabled</label>
+                  <input id="stable-event-enabled" type="checkbox" name="enabled" checked>
+                </div>
+                <button type="submit" class="nd-btn-primary">Create Stable Event</button>
+              </form>
+
+              [[ range .StableGroups ]]
+              <section class="nd-panel">
+                <header class="nd-panel-header">
+                  <h4>[[ .Group ]]</h4>
+                </header>
+                [[ range .Events ]]
+                <div class="nd-well"
+                     data-eventic-drop-zone
+                     data-stable-event="[[ .Event ]]">
+                  <form data-eventic-action="PUT /api/stable-events/[[ .ID ]]">
+                    <div class="nd-grid nd-grid-2">
+                      <div class="nd-form-group">
+                        <label for="stable-event-value-[[ .ID ]]">Event</label>
+                        <input id="stable-event-value-[[ .ID ]]" name="event" value="[[ .Event ]]" [[ if .BuiltIn ]]readonly[[ end ]] required>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="stable-event-title-[[ .ID ]]">Title</label>
+                        <input id="stable-event-title-[[ .ID ]]" name="title" value="[[ .Title ]]" required>
+                      </div>
+                      <div class="nd-form-group">
+                        <label for="stable-event-group-[[ .ID ]]">Group</label>
+                        <input id="stable-event-group-[[ .ID ]]" name="group" value="[[ .Group ]]" required>
+                      </div>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="stable-event-description-[[ .ID ]]">Description</label>
+                      <textarea id="stable-event-description-[[ .ID ]]" name="description" rows="3">[[ .Description ]]</textarea>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="stable-event-enabled-[[ .ID ]]">Enabled</label>
+                      <input id="stable-event-enabled-[[ .ID ]]" type="checkbox" name="enabled" [[ if .Enabled ]]checked[[ end ]]>
+                    </div>
+                    <button type="submit" class="nd-btn-primary">Update Stable Event</button>
+                    [[ if not .BuiltIn ]]
+                    <button type="button"
+                            class="nd-btn-danger"
+                            data-eventic-delete="DELETE /api/stable-events/[[ .ID ]]">Delete Stable Event</button>
+                    [[ end ]]
+                  </form>
+
+                  <p><span class="nd-badge nd-badge-info">[[ .Event ]]</span></p>
+                  [[ if .Mappings ]]
+                  <table class="nd-table-striped nd-table-hover">
+                    <thead>
+                      <tr>
+                        <th>Mapped Provider</th>
+                        <th>Name</th>
+                        <th>Priority</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      [[ range .Mappings ]]
+                      <tr>
+                        <td>[[ .Provider ]]</td>
+                        <td>[[ .Name ]]</td>
+                        <td>[[ .Priority ]]</td>
+                        <td>
+                          <button type="button"
+                                  class="nd-btn-danger nd-btn-sm"
+                                  data-eventic-delete="DELETE /api/event-mappings/[[ .ID ]]">Remove</button>
+                        </td>
+                      </tr>
+                      [[ end ]]
+                    </tbody>
+                  </table>
+                  [[ else ]]
+                  <p data-eventic-empty-drop>Drop provider events here.</p>
+                  [[ end ]]
+                </div>
+                [[ end ]]
+              </section>
+              [[ end ]]
+            </section>
+          </div>
         </section>
 
-        <section class="nd-panel" id="event-mapping-create">
+        <section class="nd-panel" id="event-mappings">
           <header class="nd-panel-header">
-            <h2>New Event Mapping</h2>
+            <h2>Advanced Mappings</h2>
           </header>
-          <datalist id="stable-event-options">
-            [[ range .StableEvents ]]
-            <option value="[[ .Event ]]">[[ .Title ]]</option>
-            [[ end ]]
-          </datalist>
           <form data-eventic-action="POST /api/event-mappings">
             <div class="nd-grid nd-grid-2">
               <div class="nd-form-group">
@@ -130,18 +294,13 @@
   "ref": "refs/heads/main"
 }</textarea>
             </div>
-            <label class="nd-checkbox">
-              <input type="checkbox" name="enabled" checked>
-              <span>Enabled</span>
-            </label>
+            <div class="nd-form-group">
+              <label for="mapping-enabled">Enabled</label>
+              <input id="mapping-enabled" type="checkbox" name="enabled" checked>
+            </div>
             <button type="submit" class="nd-btn-primary">Save Mapping</button>
           </form>
-        </section>
 
-        <section class="nd-panel" id="event-mappings">
-          <header class="nd-panel-header">
-            <h2>Event Mappings</h2>
-          </header>
           [[ range .EventMappings ]]
           [[ $mapping := . ]]
           <article class="nd-card">
@@ -177,10 +336,10 @@
                   <label for="mapping-conditions-[[ .ID ]]">Conditions JSON</label>
                   <textarea id="mapping-conditions-[[ .ID ]]" name="conditions_text" rows="6">[[ .ConditionsText ]]</textarea>
                 </div>
-                <label class="nd-checkbox">
-                  <input type="checkbox" name="enabled" [[ if .Enabled ]]checked[[ end ]]>
-                  <span>Enabled</span>
-                </label>
+                <div class="nd-form-group">
+                  <label for="mapping-enabled-[[ .ID ]]">Enabled</label>
+                  <input id="mapping-enabled-[[ .ID ]]" type="checkbox" name="enabled" [[ if .Enabled ]]checked[[ end ]]>
+                </div>
                 <button type="submit" class="nd-btn-primary">Update Mapping</button>
                 <button type="button"
                         class="nd-btn-danger"
@@ -355,14 +514,14 @@
               <label for="workflow-post-project-message">Post Project Message</label>
               <textarea id="workflow-post-project-message" name="post_project_message" rows="4"></textarea>
             </div>
-            <label class="nd-checkbox">
-              <input type="checkbox" name="continue_on_error">
-              <span>Continue On Error</span>
-            </label>
-            <label class="nd-checkbox">
-              <input type="checkbox" name="post_continue_on_error">
-              <span>Post Action Continue On Error</span>
-            </label>
+            <div class="nd-form-group">
+              <label for="workflow-continue-on-error">Continue On Error</label>
+              <input id="workflow-continue-on-error" type="checkbox" name="continue_on_error">
+            </div>
+            <div class="nd-form-group">
+              <label for="workflow-post-continue-on-error">Post Action Continue On Error</label>
+              <input id="workflow-post-continue-on-error" type="checkbox" name="post_continue_on_error">
+            </div>
             <button type="submit" class="nd-btn-primary">Save Workflow</button>
           </form>
         </section>
@@ -556,14 +715,14 @@
                       <label for="step-post-project-message-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Project Message</label>
                       <textarea id="step-post-project-message-[[ $workflow.ID ]]-[[ .NodeKey ]]" name="post_project_message" rows="4">[[ .PostProjectMsg ]]</textarea>
                     </div>
-                    <label class="nd-checkbox">
-                      <input type="checkbox" name="continue_on_error" [[ if .ContinueOnError ]]checked[[ end ]]>
-                      <span>Continue On Error</span>
-                    </label>
-                    <label class="nd-checkbox">
-                      <input type="checkbox" name="post_continue_on_error" [[ if .PostContinueOnError ]]checked[[ end ]]>
-                      <span>Post Action Continue On Error</span>
-                    </label>
+                    <div class="nd-form-group">
+                      <label for="step-continue-on-error-[[ $workflow.ID ]]-[[ .NodeKey ]]">Continue On Error</label>
+                      <input id="step-continue-on-error-[[ $workflow.ID ]]-[[ .NodeKey ]]" type="checkbox" name="continue_on_error" [[ if .ContinueOnError ]]checked[[ end ]]>
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="step-post-continue-on-error-[[ $workflow.ID ]]-[[ .NodeKey ]]">Post Action Continue On Error</label>
+                      <input id="step-post-continue-on-error-[[ $workflow.ID ]]-[[ .NodeKey ]]" type="checkbox" name="post_continue_on_error" [[ if .PostContinueOnError ]]checked[[ end ]]>
+                    </div>
                     <button type="submit" class="nd-btn-primary">Update Step</button>
                     <button type="button"
                             class="nd-btn-danger"
@@ -717,14 +876,14 @@
                       <label for="append-step-post-project-message-[[ .ID ]]">Post Project Message</label>
                       <textarea id="append-step-post-project-message-[[ .ID ]]" name="post_project_message" rows="4"></textarea>
                     </div>
-                    <label class="nd-checkbox">
-                      <input type="checkbox" name="continue_on_error">
-                      <span>Continue On Error</span>
-                    </label>
-                    <label class="nd-checkbox">
-                      <input type="checkbox" name="post_continue_on_error">
-                      <span>Post Action Continue On Error</span>
-                    </label>
+                    <div class="nd-form-group">
+                      <label for="append-step-continue-on-error-[[ .ID ]]">Continue On Error</label>
+                      <input id="append-step-continue-on-error-[[ .ID ]]" type="checkbox" name="continue_on_error">
+                    </div>
+                    <div class="nd-form-group">
+                      <label for="append-step-post-continue-on-error-[[ .ID ]]">Post Action Continue On Error</label>
+                      <input id="append-step-post-continue-on-error-[[ .ID ]]" type="checkbox" name="post_continue_on_error">
+                    </div>
                     <button type="submit" class="nd-btn-primary">Add Step</button>
                   </form>
                 </section>
@@ -759,7 +918,7 @@
     const eventicAllPostActionFields = [...new Set(Object.values(eventicPostActionFields).flat())];
 
     function eventicFieldGroup(field) {
-      return field.closest(".nd-form-group, .nd-checkbox");
+      return field.closest(".nd-form-group");
     }
 
     function eventicSetFieldVisible(form, name, visible) {
@@ -831,6 +990,46 @@
       return response;
     }
 
+    function eventicProviderPayload(card) {
+      let conditions = {};
+      try {
+        conditions = JSON.parse(card.dataset.conditions || "{}");
+      } catch (_) {
+        conditions = {};
+      }
+      if (!Object.keys(conditions).length) {
+        conditions.event = card.dataset.eventName || "*";
+      }
+      return {
+        provider: card.dataset.provider || "*",
+        event: card.dataset.eventName || "*",
+        label: card.dataset.eventLabel || card.dataset.eventName || "Provider event",
+        conditions
+      };
+    }
+
+    async function eventicCreateMappingFromDrop(providerEvent, stableEvent) {
+      const provider = providerEvent.provider || "*";
+      const priority = provider === "*" && providerEvent.event === "*" ? 1 : 50;
+      await eventicRequest("POST /api/event-mappings", {
+        provider,
+        name: `${providerEvent.label} -> ${stableEvent}`,
+        enabled: true,
+        priority,
+        conditions: providerEvent.conditions,
+        target_stable_event: stableEvent
+      });
+    }
+
+    function eventicFilterProviderEvents() {
+      const filter = document.querySelector("[data-eventic-provider-filter]");
+      if (!filter) return;
+      const selected = filter.value || "all";
+      for (const card of document.querySelectorAll("[data-eventic-provider-event]")) {
+        card.hidden = selected !== "all" && card.dataset.provider !== selected;
+      }
+    }
+
     document.addEventListener("submit", async (event) => {
       const form = event.target.closest("form[data-eventic-action]");
       if (!form) return;
@@ -844,9 +1043,41 @@
     });
 
     document.addEventListener("change", (event) => {
+      if (event.target.matches("[data-eventic-provider-filter]")) {
+        eventicFilterProviderEvents();
+        return;
+      }
       if (!["action_type", "response_mode", "post_action_type"].includes(event.target.name)) return;
       const form = event.target.closest("form[data-eventic-action]");
       if (form) eventicRefreshWorkflowForm(form);
+    });
+
+    document.addEventListener("dragstart", (event) => {
+      const card = event.target.closest("[data-eventic-provider-event]");
+      if (!card) return;
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData("application/json", JSON.stringify(eventicProviderPayload(card)));
+    });
+
+    document.addEventListener("dragover", (event) => {
+      const zone = event.target.closest("[data-eventic-drop-zone]");
+      if (!zone) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    });
+
+    document.addEventListener("drop", async (event) => {
+      const zone = event.target.closest("[data-eventic-drop-zone]");
+      if (!zone) return;
+      event.preventDefault();
+      try {
+        const raw = event.dataTransfer.getData("application/json") || event.dataTransfer.getData("text/plain");
+        const providerEvent = JSON.parse(raw);
+        await eventicCreateMappingFromDrop(providerEvent, zone.dataset.stableEvent);
+        window.location.reload();
+      } catch (err) {
+        alert(err.message);
+      }
     });
 
     document.addEventListener("click", async (event) => {
@@ -860,6 +1091,7 @@
       }
     });
 
+    eventicFilterProviderEvents();
     eventicRefreshWorkflowForms();
   </script>
 </body>

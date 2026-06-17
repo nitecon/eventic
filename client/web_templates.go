@@ -53,28 +53,50 @@ type dashboardView struct {
 }
 
 type configurationView struct {
-	Brand         string
-	Version       string
-	Title         string
-	Scope         string
-	Repo          string
-	Owner         string
-	Name          string
-	IsGlobal      bool
-	Project       *ProjectState
-	Workflows     []workflowConfig
-	Events        []selectOption
-	Actions       []selectOption
-	PostActions   []selectOption
-	Responses     []selectOption
-	Methods       []selectOption
-	StableEvents  []StableEventDefinition
-	EventMappings []eventMappingConfig
+	Brand          string
+	Version        string
+	Title          string
+	Scope          string
+	Repo           string
+	Owner          string
+	Name           string
+	IsGlobal       bool
+	Orgs           []string
+	DefaultOrg     string
+	Projects       []ProjectSummary
+	Project        *ProjectState
+	Workflows      []workflowConfig
+	Events         []selectOption
+	Actions        []selectOption
+	PostActions    []selectOption
+	Responses      []selectOption
+	Methods        []selectOption
+	StableEvents   []StableEventDefinition
+	StableGroups   []stableEventGroup
+	ProviderEvents []providerEventConfig
+	ProviderTypes  []selectOption
+	EventMappings  []eventMappingConfig
 }
 
 type eventMappingConfig struct {
 	EventMapping
 	ConditionsText string
+}
+
+type stableEventGroup struct {
+	Group  string
+	Events []stableEventConfig
+}
+
+type stableEventConfig struct {
+	StableEventDefinition
+	Mappings []eventMappingConfig
+}
+
+type providerEventConfig struct {
+	ProviderEvent
+	ConditionsText string
+	ConditionsJSON string
 }
 
 // indexHandler serves the dashboard at "/". When StaticDir contains an
@@ -143,6 +165,10 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 	if !ok {
 		return configurationView{}, false, nil
 	}
+	stableEvents, err := store.ListStableEvents(r.Context())
+	if err != nil {
+		return configurationView{}, true, err
+	}
 
 	view := configurationView{
 		Brand:        "Eventic",
@@ -150,12 +176,24 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 		Scope:        scope,
 		Repo:         repo,
 		IsGlobal:     scope == WorkflowScopeGlobal,
-		Events:       workflowEventOptions(),
+		DefaultOrg:   "nitecon",
+		Events:       workflowEventOptionsFromStableEvents(stableEvents),
 		Actions:      workflowActionOptions(),
 		PostActions:  workflowPostActionOptions(),
 		Responses:    workflowResponseOptions(),
 		Methods:      workflowHTTPMethodOptions(),
-		StableEvents: StableEventDefinitions(),
+		StableEvents: stableEvents,
+	}
+	allProjects, _ := store.ListProjectSummaries(r.Context(), "", "")
+	view.Orgs = projectOrgs(allProjects)
+	if repoOwner, _ := splitRepoName(repo); repoOwner != "" {
+		view.DefaultOrg = repoOwner
+	}
+	if !containsString(view.Orgs, view.DefaultOrg) && len(view.Orgs) > 0 {
+		view.DefaultOrg = view.Orgs[0]
+	}
+	if view.DefaultOrg != "" {
+		view.Projects, _ = store.ListProjectSummaries(r.Context(), view.DefaultOrg, "")
 	}
 	if view.IsGlobal {
 		view.Title = "Global Workflows"
@@ -164,6 +202,9 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 			return configurationView{}, true, err
 		}
 		view.EventMappings = eventMappingConfigs(mappings)
+		view.StableGroups = stableEventGroups(stableEvents, view.EventMappings)
+		view.ProviderEvents = providerEventConfigs(ProviderEventCatalog())
+		view.ProviderTypes = ProviderEventOptions()
 	} else {
 		view.Owner, view.Name = splitRepoName(repo)
 		view.Title = repo
@@ -189,6 +230,44 @@ func eventMappingConfigs(mappings []EventMapping) []eventMappingConfig {
 		configs = append(configs, eventMappingConfig{
 			EventMapping:   mapping,
 			ConditionsText: string(data),
+		})
+	}
+	return configs
+}
+
+func stableEventGroups(stableEvents []StableEventDefinition, mappings []eventMappingConfig) []stableEventGroup {
+	byEvent := map[string][]eventMappingConfig{}
+	for _, mapping := range mappings {
+		byEvent[mapping.TargetStableEvent] = append(byEvent[mapping.TargetStableEvent], mapping)
+	}
+
+	indexByGroup := map[string]int{}
+	var groups []stableEventGroup
+	for _, stableEvent := range stableEvents {
+		groupName := defaultStableEventGroup(stableEvent.Group)
+		index, ok := indexByGroup[groupName]
+		if !ok {
+			index = len(groups)
+			indexByGroup[groupName] = index
+			groups = append(groups, stableEventGroup{Group: groupName})
+		}
+		groups[index].Events = append(groups[index].Events, stableEventConfig{
+			StableEventDefinition: stableEvent,
+			Mappings:              byEvent[stableEvent.Event],
+		})
+	}
+	return groups
+}
+
+func providerEventConfigs(events []ProviderEvent) []providerEventConfig {
+	configs := make([]providerEventConfig, 0, len(events))
+	for _, event := range events {
+		compact, _ := json.Marshal(event.Conditions)
+		pretty, _ := json.MarshalIndent(event.Conditions, "", "  ")
+		configs = append(configs, providerEventConfig{
+			ProviderEvent:  event,
+			ConditionsText: string(pretty),
+			ConditionsJSON: string(compact),
 		})
 	}
 	return configs

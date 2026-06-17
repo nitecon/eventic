@@ -84,3 +84,87 @@ func TestEventMappingMatchesBodyArrayCondition(t *testing.T) {
 		t.Fatal("expected array condition to match")
 	}
 }
+
+func TestEventMappingMatchesWildcardRefCondition(t *testing.T) {
+	event := protocol.EventMsg{
+		Provider:      "github",
+		GitHubEvent:   "push",
+		ExternalEvent: "push",
+		Ref:           "refs/tags/v1.2.3",
+		Payload:       json.RawMessage(`{}`),
+	}
+	mapping := EventMapping{
+		Provider:          "github",
+		Enabled:           true,
+		Conditions:        map[string]string{"event": "push", "ref": "refs/tags/*"},
+		TargetStableEvent: StableEventArtifactPublished,
+	}
+
+	if !mappingMatchesEvent(mapping, event) {
+		t.Fatal("expected wildcard ref condition to match")
+	}
+}
+
+func TestStableEventRegistrySupportsCustomEvents(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+
+	stableEvents, err := store.ListStableEvents(ctx)
+	if err != nil {
+		t.Fatalf("list seeded stable events: %v", err)
+	}
+	if len(stableEvents) < len(StableEventDefinitions()) {
+		t.Fatalf("expected seeded stable events, got %d", len(stableEvents))
+	}
+
+	id, err := store.CreateStableEvent(ctx, &StableEventDefinition{
+		Event:       "catchall",
+		Title:       "Catch All",
+		Group:       "Custom",
+		Description: "Route any unmatched provider event.",
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("create custom stable event: %v", err)
+	}
+	stableEvent, err := store.GetStableEvent(ctx, id)
+	if err != nil {
+		t.Fatalf("get custom stable event: %v", err)
+	}
+	if stableEvent.Event != "catchall" || stableEvent.BuiltIn {
+		t.Fatalf("unexpected custom stable event: %#v", stableEvent)
+	}
+
+	stableEvent.Event = "catchall.renamed"
+	if err := store.UpdateStableEvent(ctx, stableEvent); err != nil {
+		t.Fatalf("rename custom stable event: %v", err)
+	}
+	renamed, err := store.GetStableEvent(ctx, id)
+	if err != nil {
+		t.Fatalf("get renamed stable event: %v", err)
+	}
+	if renamed.Event != "catchall.renamed" {
+		t.Fatalf("expected renamed stable event, got %#v", renamed)
+	}
+}
+
+func TestBuiltInStableEventCannotBeRenamed(t *testing.T) {
+	ctx := t.Context()
+	store := newTestStore(t)
+
+	stableEvents, err := store.ListStableEvents(ctx)
+	if err != nil {
+		t.Fatalf("list seeded stable events: %v", err)
+	}
+	if len(stableEvents) == 0 {
+		t.Fatal("expected seeded stable events")
+	}
+	builtIn := stableEvents[0]
+	if !builtIn.BuiltIn {
+		t.Fatalf("expected built-in event, got %#v", builtIn)
+	}
+	builtIn.Event = "renamed"
+	if err := store.UpdateStableEvent(ctx, &builtIn); err != ErrStableEventBuiltIn {
+		t.Fatalf("expected built-in rename error, got %v", err)
+	}
+}

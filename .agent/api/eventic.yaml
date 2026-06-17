@@ -27,6 +27,8 @@ content:
     - client/state.go
     - client/stable_events.go
     - client/stable_event_store.go
+    - client/stable_event_registry.go
+    - client/provider_events.go
     - client/workflow_store.go
     - server/server.go
     - client/web.go
@@ -47,6 +49,8 @@ content:
     - name: Configure repository workflows
       steps:
         - Open `GET /{org}/{repo}` for a server-rendered configuration page. Unknown repositories return 404.
+        - Configuration pages preserve the same stable repository sidebar as the dashboard: organization selector, search, and repository links remain visible after clicking into one repository.
+        - Configuration forms use top-label form groups consistently; checkbox controls should be rendered inside `.nd-form-group` with a `label for=...` above the input, not as side-by-side `.nd-checkbox` labels.
         - Existing workflows are loaded from `GET /api/workflow-config?scope=repo&repo={org}/{repo}`.
         - Create a workflow with `POST /api/workflow-config?scope=repo&repo={org}/{repo}`.
         - Update a workflow with `PUT /api/workflow-config/{id}`.
@@ -68,11 +72,15 @@ content:
     - name: Configure global workflows
       steps:
         - Open `GET /global` for all-repository workflow defaults.
+        - The global configuration page also preserves the stable repository sidebar and the same top-label form control pattern used by repository configuration pages.
         - Existing workflows are loaded from `GET /api/workflow-config?scope=global`.
         - Create global workflows with `POST /api/workflow-config?scope=global`.
         - Global workflow forms use the same selected `event_type`, typed step, result evaluation, and response handling contract as repository workflows.
-        - The same page exposes stable event mapping configuration. Mappings are loaded from `GET /api/event-mappings`, created with `POST /api/event-mappings`, updated with `PUT /api/event-mappings/{id}`, and deleted with `DELETE /api/event-mappings/{id}`.
-        - Mapping payloads use `provider`, `name`, `enabled`, `priority`, `conditions` or `conditions_text`, and `target_stable_event`. A provider value of `*` applies to every provider. Conditions can match `event`, `action`, `ref`, `repo`, `sender`, `headers.Name`, `metadata.name`, or `body.path` values, including array wildcards like `body.vulnerabilities[].severity`.
+        - The same page exposes stable event registry and mapping configuration. The visual mapper shows provider events in the left column and grouped stable events in the right column; dropping a provider event onto a stable event creates a mapping through `POST /api/event-mappings`.
+        - Stable events are loaded from `GET /api/stable-events`, created with `POST /api/stable-events`, updated with `PUT /api/stable-events/{id}`, and custom events are deleted with `DELETE /api/stable-events/{id}`. Built-in stable event keys cannot be renamed or deleted, but their display metadata can be edited.
+        - Provider palette rows are loaded from `GET /api/provider-events?provider=PROVIDER`; provider filter `all` returns the whole catalog.
+        - Mappings are loaded from `GET /api/event-mappings`, created with `POST /api/event-mappings`, updated with `PUT /api/event-mappings/{id}`, and deleted with `DELETE /api/event-mappings/{id}`.
+        - Mapping payloads use `provider`, `name`, `enabled`, `priority`, `conditions` or `conditions_text`, and `target_stable_event`. A provider value of `*` applies to every provider. Conditions can match `event`, `action`, `ref`, `repo`, `sender`, `headers.Name`, `metadata.name`, or `body.path` values, including glob values like `refs/tags/*` and array wildcards like `body.vulnerabilities[].severity`.
         - Default mappings include `artifact.initiate`, `artifact.published`, `system.failure`, `security.alarm`, and `communication.received`.
         - Runtime workflow resolution uses `StableEvent` with no action suffix when normalization matched; otherwise it preserves legacy repo/action, repo/event, global/action, global/event precedence.
     - name: Ingest provider webhooks
@@ -81,6 +89,7 @@ content:
         - The generic ingress path is `POST /v1/webhooks/{provider}`. `github` uses the same HMAC validation; non-GitHub providers use `Authorization: Bearer <token>` checked against `EVENTIC_COMMS_TOKENS` or `EVENTIC_CLIENT_TOKENS`.
         - Generic payloads must provide or expose a target `repo` (`org/repo`) so the relay can fan out to subscribed clients and the client can run a repository-scoped workflow.
         - GitLab, Bitbucket, Prometheus/Alertmanager, and custom payloads are parsed into `EventMsg.Provider`, `ExternalEvent`, `ExternalAction`, `Headers`, `Metadata`, and raw `Payload`; the client then applies stable event mappings.
+        - Direct stable event ingress is `POST /event/{stable_event}` with Bearer-token auth. The JSON body must include `repo` and may include `ref`, `title`, `body`, `action`, `message`, `sender`, `clone_url`, and string metadata. The relay sets `EventMsg.StableEvent` to the path segment and bypasses provider mapping.
     - name: Use project and workflow APIs
       steps:
         - "`GET /api/projects` preserves the legacy string-array response for known repositories."
@@ -88,7 +97,9 @@ content:
         - "`GET /api/projects/{org}/{repo}` returns the latest `ProjectState` for that repository."
         - "`GET /api/workflows`, `POST /api/workflows`, `GET/PUT/DELETE /api/workflows/{id}` remain the raw DAG CRUD API and accept explicit nodes and edges."
         - "`GET /api/event-types` returns stable event keys plus GitHub webhook event/action references and Eventic's synthetic `comms` event."
-        - "`GET /api/stable-events` returns stable event catalog rows with event key, title, description, example sources, and workflow uses."
+        - "`GET /api/stable-events` returns stable event registry rows with id, event key, group, title, description, enabled, built_in, example sources, and workflow uses."
+        - "`POST /api/stable-events`, `PUT /api/stable-events/{id}`, and `DELETE /api/stable-events/{id}` manage custom stable events. Deleting a custom stable event also removes mappings targeting that key."
+        - "`GET /api/provider-events?provider=` returns provider-event palette rows with provider, event, action, label, description, and mapping conditions."
         - "`GET/POST /api/event-mappings` and `PUT/DELETE /api/event-mappings/{id}` are the local mapping registry API."
         - "`GET /api/runs?repo=ORG/REPO&limit=N` lists runs for one repo; omitting `repo` lists recent runs across repositories."
         - "`POST /api/runs` triggers a manual replay event with `repo`, `event_type`, `ref`, and optional `message`."

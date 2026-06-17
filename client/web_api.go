@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -792,14 +793,23 @@ type eventType struct {
 
 // eventTypesHandler returns the stable internal event catalog plus the GitHub
 // webhook reference and synthetic "comms" event for workflow editor dropdowns.
-func eventTypesHandler() http.HandlerFunc {
+func eventTypesHandler(store *ProjectStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		types := make([]eventType, 0, len(GitHubWebhookEvents)+len(StableEventDefinitions())+1)
-		for _, stable := range StableEventDefinitions() {
+		stableEvents := StableEventDefinitions()
+		if store != nil {
+			var err error
+			stableEvents, err = store.ListStableEvents(r.Context())
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to list stable events")
+				return
+			}
+		}
+		types := make([]eventType, 0, len(GitHubWebhookEvents)+len(stableEvents)+1)
+		for _, stable := range stableEvents {
 			types = append(types, eventType{Event: stable.Event, Actions: []string{}})
 		}
 		for event, actions := range GitHubWebhookEvents {
@@ -814,13 +824,194 @@ func eventTypesHandler() http.HandlerFunc {
 	}
 }
 
-func stableEventsHandler() http.HandlerFunc {
+type stableEventRequest struct {
+	Event          string   `json:"event"`
+	Title          string   `json:"title"`
+	Group          string   `json:"group"`
+	Description    string   `json:"description"`
+	Enabled        *bool    `json:"enabled"`
+	ExampleSources []string `json:"example_sources"`
+	WorkflowUses   []string `json:"workflow_uses"`
+}
+
+func stableEventsCollectionHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			stableEvents, err := store.ListStableEvents(r.Context())
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to list stable events")
+				return
+			}
+			writeJSON(w, http.StatusOK, stableEvents)
+		case http.MethodPost:
+			stableEvent, fieldErrs := stableEventFromRequest(r, nil)
+			if fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			id, err := store.CreateStableEvent(r.Context(), stableEvent)
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to create stable event")
+				return
+			}
+			stableEvent.ID = id
+			writeJSON(w, http.StatusCreated, stableEvent)
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func stableEventItemHandler(store *ProjectStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			globalError(w, http.StatusInternalServerError, "project store disabled")
+			return
+		}
+		id, ok := parsePathID(w, r, "/api/stable-events/")
+		if !ok {
+			return
+		}
+		switch r.Method {
+		case http.MethodPut:
+			existing, err := store.GetStableEvent(r.Context(), id)
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "stable event not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to load stable event")
+				return
+			}
+			stableEvent, fieldErrs := stableEventFromRequest(r, existing)
+			if fieldErrs != nil {
+				writeAPIError(w, http.StatusUnprocessableEntity, fieldErrs)
+				return
+			}
+			stableEvent.ID = id
+			stableEvent.BuiltIn = existing.BuiltIn
+			err = store.UpdateStableEvent(r.Context(), stableEvent)
+			if errors.Is(err, ErrStableEventBuiltIn) {
+				globalError(w, http.StatusConflict, err.Error())
+				return
+			}
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "stable event not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to update stable event")
+				return
+			}
+			writeJSON(w, http.StatusOK, stableEvent)
+		case http.MethodDelete:
+			err := store.DeleteStableEvent(r.Context(), id)
+			if errors.Is(err, ErrStableEventBuiltIn) {
+				globalError(w, http.StatusConflict, err.Error())
+				return
+			}
+			if isNotFound(err) {
+				globalError(w, http.StatusNotFound, "stable event not found")
+				return
+			}
+			if err != nil {
+				globalError(w, http.StatusInternalServerError, "failed to delete stable event")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		default:
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func stableEventFromRequest(r *http.Request, existing *StableEventDefinition) (*StableEventDefinition, map[string]string) {
+	var req stableEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, map[string]string{"error": "invalid json"}
+	}
+	enabled := true
+	if existing != nil {
+		enabled = existing.Enabled
+	}
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	event := strings.TrimSpace(req.Event)
+	if event == "" && existing != nil {
+		event = existing.Event
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = event
+	}
+	group := defaultStableEventGroup(req.Group)
+	if strings.TrimSpace(req.Group) == "" && existing != nil {
+		group = defaultStableEventGroup(existing.Group)
+	}
+	stableEvent := &StableEventDefinition{
+		Event:          event,
+		Title:          title,
+		Group:          group,
+		Description:    strings.TrimSpace(req.Description),
+		Enabled:        enabled,
+		ExampleSources: cleanStringSlice(req.ExampleSources),
+		WorkflowUses:   cleanStringSlice(req.WorkflowUses),
+	}
+	if existing != nil {
+		stableEvent.CreatedAt = existing.CreatedAt
+		if len(req.ExampleSources) == 0 {
+			stableEvent.ExampleSources = existing.ExampleSources
+		}
+		if len(req.WorkflowUses) == 0 {
+			stableEvent.WorkflowUses = existing.WorkflowUses
+		}
+	}
+	return stableEvent, validateStableEvent(stableEvent)
+}
+
+func validateStableEvent(stableEvent *StableEventDefinition) map[string]string {
+	errs := map[string]string{}
+	if strings.TrimSpace(stableEvent.Event) == "" {
+		errs["event"] = "required"
+	} else if strings.ContainsAny(stableEvent.Event, " \t\r\n/") {
+		errs["event"] = "must not contain whitespace or /"
+	}
+	if strings.TrimSpace(stableEvent.Title) == "" {
+		errs["title"] = "required"
+	}
+	if strings.TrimSpace(stableEvent.Group) == "" {
+		errs["group"] = "required"
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
+}
+
+func cleanStringSlice(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
+}
+
+func providerEventsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		writeJSON(w, http.StatusOK, StableEventDefinitions())
+		writeJSON(w, http.StatusOK, FilterProviderEvents(r.URL.Query().Get("provider")))
 	}
 }
 

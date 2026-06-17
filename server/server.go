@@ -32,6 +32,7 @@ func Start(cfg Config) error {
 	mux.HandleFunc("/webhook/github", webhookHandler(cfg))
 	mux.HandleFunc("/v1/webhooks/", providerWebhookHandler(cfg))
 	mux.HandleFunc("/event/comms", commsHandler(cfg))
+	mux.HandleFunc("/event/", stableEventHandler(cfg))
 	mux.HandleFunc("/ws", wsHandler(cfg))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -185,6 +186,135 @@ func commsHandler(cfg Config) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"accepted"}`))
 	}
+}
+
+// stableEventHandler accepts a direct stable internal event on /event/{name}.
+// This bypasses provider-specific normalization while preserving the same
+// authenticated fan-out path used by comms and generic provider webhooks.
+func stableEventHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !validateCommsToken(cfg, r.Header.Get("Authorization")) {
+			log.Warn().Msg("invalid stable event token")
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		stableEvent := strings.Trim(strings.TrimPrefix(r.URL.Path, "/event/"), "/")
+		if stableEvent == "" || strings.ContainsAny(stableEvent, " \t\r\n/") {
+			http.Error(w, "stable event name required", http.StatusBadRequest)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "failed to read body", http.StatusBadRequest)
+			return
+		}
+		event, err := parseStableEventRequest(stableEvent, body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(event.Message) > maxCommsMessageBytes {
+			http.Error(w, "message exceeds maximum size", http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		log.Info().
+			Str("stable_event", event.StableEvent).
+			Str("repo", event.Repo).
+			Str("ref", event.Ref).
+			Str("delivery", event.DeliveryID).
+			Msg("stable event received")
+
+		EventChannel <- event
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":       "accepted",
+			"delivery_id":  event.DeliveryID,
+			"stable_event": event.StableEvent,
+		})
+	}
+}
+
+func parseStableEventRequest(stableEvent string, body []byte) (protocol.EventMsg, error) {
+	stableEvent = strings.TrimSpace(stableEvent)
+	if stableEvent == "" || strings.ContainsAny(stableEvent, " \t\r\n/") {
+		return protocol.EventMsg{}, fmt.Errorf("stable event name required")
+	}
+	var req struct {
+		DeliveryID string            `json:"delivery_id"`
+		Repo       string            `json:"repo"`
+		Ref        string            `json:"ref"`
+		Title      string            `json:"title"`
+		Body       string            `json:"body"`
+		Action     string            `json:"action"`
+		Message    string            `json:"message"`
+		Sender     string            `json:"sender"`
+		CloneURL   string            `json:"clone_url"`
+		Metadata   map[string]string `json:"metadata"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return protocol.EventMsg{}, fmt.Errorf("parse error")
+	}
+	req.Repo = strings.TrimSpace(req.Repo)
+	if req.Repo == "" {
+		return protocol.EventMsg{}, fmt.Errorf("repo is required")
+	}
+	metadata := map[string]string{}
+	for key, value := range req.Metadata {
+		metadata[key] = value
+	}
+	if req.Title != "" {
+		metadata["title"] = req.Title
+	}
+	if req.Action != "" {
+		metadata["action"] = req.Action
+	}
+	cloneURL := strings.TrimSpace(req.CloneURL)
+	if cloneURL == "" {
+		cloneURL = "https://github.com/" + req.Repo + ".git"
+	}
+	deliveryID := strings.TrimSpace(req.DeliveryID)
+	if deliveryID == "" {
+		deliveryID = fmt.Sprintf("event-%d", time.Now().UnixNano())
+	}
+	return protocol.EventMsg{
+		MsgType:        "Event",
+		DeliveryID:     deliveryID,
+		GitHubEvent:    "internal",
+		Provider:       "eventic",
+		StableEvent:    stableEvent,
+		ExternalEvent:  "eventic",
+		ExternalAction: strings.TrimSpace(req.Action),
+		Repo:           req.Repo,
+		Ref:            strings.TrimSpace(req.Ref),
+		Action:         strings.TrimSpace(req.Action),
+		Sender:         firstNonEmpty(strings.TrimSpace(req.Sender), "eventic-event"),
+		Message:        stableEventMessage(req.Message, req.Title, req.Body),
+		CloneURL:       cloneURL,
+		Metadata:       metadata,
+		Payload:        json.RawMessage(body),
+	}, nil
+}
+
+func stableEventMessage(message, title, body string) string {
+	message = strings.TrimSpace(message)
+	if message != "" {
+		return message
+	}
+	title = strings.TrimSpace(title)
+	body = strings.TrimSpace(body)
+	if title != "" && body != "" {
+		return title + "\n\n" + body
+	}
+	return firstNonEmpty(title, body)
 }
 
 // validateCommsToken validates an Authorization header value of the form

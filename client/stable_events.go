@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,11 +24,17 @@ const (
 // StableEventDefinition describes one workflow-facing event key. These values
 // are intentionally provider-agnostic and are safe for workflow subscriptions.
 type StableEventDefinition struct {
-	Event          string   `json:"event"`
-	Title          string   `json:"title"`
-	Description    string   `json:"description"`
-	ExampleSources []string `json:"example_sources"`
-	WorkflowUses   []string `json:"workflow_uses"`
+	ID             int64     `json:"id,omitempty"`
+	Event          string    `json:"event"`
+	Title          string    `json:"title"`
+	Group          string    `json:"group"`
+	Description    string    `json:"description"`
+	Enabled        bool      `json:"enabled"`
+	BuiltIn        bool      `json:"built_in"`
+	ExampleSources []string  `json:"example_sources"`
+	WorkflowUses   []string  `json:"workflow_uses"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at,omitempty"`
 }
 
 // NormalizedEvent is the strict shape produced by the inbound normalization
@@ -49,35 +56,50 @@ func StableEventDefinitions() []StableEventDefinition {
 		{
 			Event:          StableEventArtifactInitiate,
 			Title:          "Initiate Artifact",
+			Group:          "Artifact",
 			Description:    "Start building or preparing a new artifact.",
+			Enabled:        true,
+			BuiltIn:        true,
 			ExampleSources: []string{"github push refs/heads/main", "gitlab merge_request merged", "bitbucket repo.push"},
 			WorkflowUses:   []string{"Build and store an artifact", "Start security scans", "Notify a build channel"},
 		},
 		{
 			Event:          StableEventArtifactPublished,
 			Title:          "Publish Artifact",
+			Group:          "Artifact",
 			Description:    "Promote an existing verified artifact without rebuilding it.",
+			Enabled:        true,
+			BuiltIn:        true,
 			ExampleSources: []string{"github release.published", "github tag push", "bitbucket tag push"},
 			WorkflowUses:   []string{"Promote registry tags", "Restart production services", "Start smoke tests"},
 		},
 		{
 			Event:          StableEventSystemFailure,
 			Title:          "System Failure",
+			Group:          "SRE",
 			Description:    "React to a failed build, failed workflow, or operational alarm.",
+			Enabled:        true,
+			BuiltIn:        true,
 			ExampleSources: []string{"github workflow_run.completed failure", "prometheus Alertmanager firing", "datadog monitor alert"},
 			WorkflowUses:   []string{"Notify a project channel", "Correlate with recent deploys", "Page on-call or roll back"},
 		},
 		{
 			Event:          StableEventSecurityAlarm,
 			Title:          "Security Alarm",
+			Group:          "Security",
 			Description:    "React to high-risk vulnerabilities, dependency alerts, or registry scan findings.",
+			Enabled:        true,
+			BuiltIn:        true,
 			ExampleSources: []string{"github dependabot_alert.created", "snyk vulnerability", "aws inspector finding"},
 			WorkflowUses:   []string{"Mark artifacts tainted", "Open a priority ticket", "Notify security owners"},
 		},
 		{
 			Event:          StableEventCommunicationReceived,
 			Title:          "Communication Received",
+			Group:          "Communication",
 			Description:    "Handle internal application messages or agent instructions.",
+			Enabled:        true,
+			BuiltIn:        true,
 			ExampleSources: []string{"eventic comms", "custom webhook title/body/action", "discord interaction"},
 			WorkflowUses:   []string{"Route an agent task", "Post a project update", "Trigger follow-up workflow steps"},
 		},
@@ -85,7 +107,10 @@ func StableEventDefinitions() []StableEventDefinition {
 }
 
 func stableEventOptions() []selectOption {
-	defs := StableEventDefinitions()
+	return stableEventOptionsFromDefinitions(StableEventDefinitions())
+}
+
+func stableEventOptionsFromDefinitions(defs []StableEventDefinition) []selectOption {
 	options := make([]selectOption, 0, len(defs))
 	for _, def := range defs {
 		options = append(options, selectOption{Value: def.Event, Label: def.Event})
@@ -160,7 +185,7 @@ func isStableInternalEvent(eventType string) bool {
 	if _, external := GitHubWebhookEvents[eventName]; external {
 		return false
 	}
-	return strings.Contains(eventType, ".")
+	return eventName != "comms"
 }
 
 func eventProvider(event protocol.EventMsg) string {
@@ -282,10 +307,16 @@ func conditionValueMatches(actual, expected string) bool {
 	if expected == "*" {
 		return true
 	}
+	actual = strings.TrimSpace(actual)
 	for _, candidate := range strings.Split(expected, ",") {
 		candidate = strings.TrimSpace(candidate)
-		if candidate == "*" || strings.EqualFold(strings.TrimSpace(actual), candidate) {
+		if candidate == "*" || strings.EqualFold(actual, candidate) {
 			return true
+		}
+		if strings.ContainsAny(candidate, "*?[") {
+			if matched, _ := path.Match(candidate, actual); matched {
+				return true
+			}
 		}
 	}
 	return false

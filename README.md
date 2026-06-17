@@ -13,7 +13,7 @@ It is a **per-repo workflow engine**: when an event arrives, the client normaliz
 ```
 GitHub ──webhook──────┐
                       ├─▶ [Eventic Server] ◀──websocket──▶ [Eventic Client] ──▶ resolve workflow ─▶ run DAG
-POST /event/comms ────┘     (public / cloud)                  (on-prem / local)
+POST /event/{name} ───┘     (public / cloud)                  (on-prem / local)
 ```
 
 1. **Server** — A lightweight relay that receives GitHub webhooks (HMAC-validated), provider webhooks, and authenticated `comms` messages, then fans events out to connected clients over WebSocket.
@@ -30,6 +30,7 @@ The server is a single static binary packaged as a Docker container. It exposes 
 | `/webhook/github` | POST | Receives GitHub webhooks (HMAC-SHA256 validated) |
 | `/v1/webhooks/{provider}` | POST | Receives provider webhooks; `github` uses HMAC, other providers use Bearer-token auth |
 | `/event/comms` | POST | Injects a free-form agent `comms` event (Bearer-token authenticated) |
+| `/event/{stable_event}` | POST | Injects a stable internal event directly (Bearer-token authenticated) |
 | `/ws` | GET | WebSocket endpoint for client connections |
 | `/healthz` | GET | Health check |
 
@@ -39,7 +40,7 @@ The server is a single static binary packaged as a Docker container. It exposes 
 |---|---|---|---|
 | `EVENTIC_WEBHOOK_SECRET` | Yes | — | HMAC secret configured in your GitHub webhook |
 | `EVENTIC_CLIENT_TOKENS` | Yes | — | Comma-separated list of tokens that clients use to authenticate |
-| `EVENTIC_COMMS_TOKENS` | No | falls back to `EVENTIC_CLIENT_TOKENS` | Comma-separated Bearer tokens accepted on `POST /event/comms` and non-GitHub `/v1/webhooks/{provider}` |
+| `EVENTIC_COMMS_TOKENS` | No | falls back to `EVENTIC_CLIENT_TOKENS` | Comma-separated Bearer tokens accepted on `POST /event/comms`, `POST /event/{stable_event}`, and non-GitHub `/v1/webhooks/{provider}` |
 | `EVENTIC_LISTEN_ADDR` | No | `:8080` | Address and port to listen on |
 
 ### The `comms` Event
@@ -67,6 +68,27 @@ curl -X POST https://your-server:8080/event/comms \
 | `clone_url` | No | Override clone URL (defaults to `https://github.com/<repo>.git`) |
 
 The server builds an `EventMsg` with `GitHubEvent: "comms"` and pushes it onto the same channel as webhooks. On the client, the resolved `comms` workflow runs with the message available to every node via `EVENTIC_MESSAGE`.
+
+### Direct Stable Events
+
+`POST /event/{stable_event}` lets an external system skip provider-specific webhook mapping and publish a stable internal event directly. The `stable_event` path segment can be any registered stable event key, including custom keys such as `catchall`, `build.failure`, or `security.alarm`.
+
+```bash
+curl -X POST https://your-server:8080/event/security.alarm \
+  -H "Authorization: Bearer your-comms-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "repo": "myorg/myrepo",
+        "ref": "refs/heads/main",
+        "title": "Critical CVE detected",
+        "body": "CVE-2026-1234 affects the promoted image",
+        "action": "quarantine",
+        "sender": "scanner",
+        "metadata": {"severity": "CRITICAL"}
+      }'
+```
+
+The relay emits an `EventMsg` with `StableEvent` set to the path value. Workflows subscribe to that stable key, so changing the external sender does not require changing workflow definitions.
 
 ### Running with Docker
 
@@ -498,7 +520,11 @@ When `web.enabled` is true the client exposes a JSON/WS API for authoring workfl
 | `PUT` | `/api/workflow-config/{id}/steps/{node_key}` | Update one typed step |
 | `DELETE` | `/api/workflow-config/{id}/steps/{node_key}` | Delete one typed step |
 | `GET` | `/api/event-types` | Reference event list (stable events, GitHub events, and `comms`) for editor dropdowns |
-| `GET` | `/api/stable-events` | Stable event catalog with example sources and workflow uses |
+| `GET` | `/api/stable-events` | Stable event registry with event key, group, title, description, and examples |
+| `POST` | `/api/stable-events` | Create a custom stable event `{event,title,group,description,enabled}` |
+| `PUT` | `/api/stable-events/{id}` | Update one stable event; built-in event keys cannot be renamed |
+| `DELETE` | `/api/stable-events/{id}` | Delete one custom stable event and its mappings |
+| `GET` | `/api/provider-events?provider=` | Provider-event palette for drag/drop mapping |
 | `GET` | `/api/event-mappings` | List provider-to-stable-event mappings |
 | `POST` | `/api/event-mappings` | Create a mapping `{provider, name, enabled, priority, conditions|conditions_text, target_stable_event}` |
 | `PUT` | `/api/event-mappings/{id}` | Update one mapping |
