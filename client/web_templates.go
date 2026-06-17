@@ -35,6 +35,8 @@ var configurationTmpl = template.Must(
 type dashboardView struct {
 	// Brand is the short app name shown in the sidebar and browser tab.
 	Brand string
+	// Version is the running client version, copied from the build-time value.
+	Version string
 	// Orgs lists repository owners available in the organization selector.
 	Orgs []string
 	// DefaultOrg is the initially selected organization.
@@ -52,6 +54,7 @@ type dashboardView struct {
 
 type configurationView struct {
 	Brand         string
+	Version       string
 	Title         string
 	Scope         string
 	Repo          string
@@ -143,6 +146,7 @@ func buildConfigurationView(r *http.Request, store *ProjectStore) (configuration
 
 	view := configurationView{
 		Brand:        "Eventic",
+		Version:      Version,
 		Scope:        scope,
 		Repo:         repo,
 		IsGlobal:     scope == WorkflowScopeGlobal,
@@ -211,6 +215,7 @@ func buildDashboardView(r *http.Request, store *ProjectStore) dashboardView {
 
 	view := dashboardView{
 		Brand:      "Eventic",
+		Version:    Version,
 		DefaultOrg: "nitecon",
 		WSBase:     wsBase(r),
 		APIBase:    "",

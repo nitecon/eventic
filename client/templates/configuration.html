@@ -18,13 +18,6 @@
       <div class="nd-nav-brand">
         <a href="/">Eventic</a>
       </div>
-      <span class="nd-nav-section">Configuration</span>
-      <ul class="nd-nav-menu">
-        <li><a href="/global" [[ if .IsGlobal ]]class="nd-active"[[ end ]]>Global Workflows</a></li>
-        [[ if .Repo ]]
-        <li><a href="/[[ .Owner ]]/[[ .Name ]]" class="nd-active">[[ .Name ]]</a></li>
-        [[ end ]]
-      </ul>
       <span class="nd-nav-section">Navigation</span>
       <ul class="nd-nav-menu">
         <li><a href="/">Repositories</a></li>
@@ -39,7 +32,8 @@
         </div>
         <div class="app-header-right">
           <a href="/">Repositories</a>
-          <a href="/global" [[ if .IsGlobal ]]class="nd-active"[[ end ]]>Global Workflows</a>
+          <a href="/global" class="nd-active">Configuration</a>
+          <span class="nd-badge nd-badge-info" data-eventic-version="[[ .Version ]]">[[ .Version ]]</span>
           <button class="nd-btn-ghost nd-btn-sm" data-nd-theme-toggle>Toggle Theme</button>
         </div>
       </header>

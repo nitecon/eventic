@@ -42,7 +42,8 @@ content:
         - The repository list is populated from `GET /api/projects?org=ORG&search=QUERY&summary=1`.
         - Summary rows are sorted by `updated_at DESC`, then repository name descending for ties.
         - Left-clicking a repository navigates to `GET /{org}/{repo}`; it does not mutate a dashboard-local selected-repo variable.
-        - Use `GET /global` for global workflow configuration.
+        - Use the header `Configuration` link (`GET /global`) for global workflow and event mapping configuration; it is not grouped in the repository sidebar.
+        - The top-right header shows the running client version from `client.Version` with `data-eventic-version`.
     - name: Configure repository workflows
       steps:
         - Open `GET /{org}/{repo}` for a server-rendered configuration page. Unknown repositories return 404.

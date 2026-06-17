@@ -111,10 +111,13 @@ func TestDashboardTemplateNavSections(t *testing.T) {
 
 	body := rec.Body.String()
 
-	for _, section := range []string{"Organization", "Workflows", "Repositories"} {
+	for _, section := range []string{"Organization", "Repositories"} {
 		if !strings.Contains(body, section) {
 			t.Errorf("expected nav section %q in rendered output", section)
 		}
+	}
+	if strings.Contains(body, `<span class="nd-nav-section">Workflows</span>`) {
+		t.Error("configuration must live in the header nav, not the repository sidebar")
 	}
 
 	if !strings.Contains(body, `class="nd-nav-section"`) {
@@ -127,6 +130,12 @@ func TestDashboardTemplateNavSections(t *testing.T) {
 		if !strings.Contains(body, href) {
 			t.Errorf("expected routed nav link %q in rendered output", href)
 		}
+	}
+	if !strings.Contains(body, `href="/global">Configuration</a>`) {
+		t.Error("expected dedicated Configuration link in the header nav")
+	}
+	if !strings.Contains(body, `data-eventic-version="`) {
+		t.Error("expected running version badge in the header")
 	}
 }
 
@@ -212,6 +221,8 @@ func TestConfigurationTemplateGlobalWorkflows(t *testing.T) {
 		`data-eventic-action="POST /api/workflow-config?scope=global"`,
 		`name="action_type"`,
 		`name="response_mode"`,
+		`href="/global" class="nd-active">Configuration</a>`,
+		`data-eventic-version="`,
 		"eventicRefreshWorkflowForm",
 	} {
 		if !strings.Contains(body, expected) {

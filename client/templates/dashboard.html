@@ -61,13 +61,6 @@
               data-nd-set="repoSearch=''"
               data-nd-success="refresh:#repo-nav-list,refresh:#projects-overview-list">Clear</button>
 
-      <span class="nd-nav-section">Workflows</span>
-      <ul class="nd-nav-menu">
-        <li>
-          <a href="/global">Global Workflows</a>
-        </li>
-      </ul>
-
       <span class="nd-nav-section">Repositories</span>
       <ul class="nd-nav-menu"
           id="repo-nav-list"
@@ -97,8 +90,10 @@
         </div>
         <div class="app-header-right">
           <a href="/" class="nd-active">Dashboard</a>
+          <a href="/global">Configuration</a>
           <a href="#project-runs">Runs</a>
           <a href="#event-stream">Events</a>
+          <span class="nd-badge nd-badge-info" data-eventic-version="[[ .Version ]]">[[ .Version ]]</span>
           <button class="nd-btn-ghost nd-btn-sm" data-nd-theme-toggle>Toggle Theme</button>
         </div>
       </header>
