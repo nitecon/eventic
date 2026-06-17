@@ -106,10 +106,6 @@ func StableEventDefinitions() []StableEventDefinition {
 	}
 }
 
-func stableEventOptions() []selectOption {
-	return stableEventOptionsFromDefinitions(StableEventDefinitions())
-}
-
 func stableEventOptionsFromDefinitions(defs []StableEventDefinition) []selectOption {
 	options := make([]selectOption, 0, len(defs))
 	for _, def := range defs {

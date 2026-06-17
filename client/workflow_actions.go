@@ -284,10 +284,6 @@ func workflowHTTPMethodOptions() []selectOption {
 	}
 }
 
-func workflowEventOptions() []selectOption {
-	return workflowEventOptionsFromStableEvents(StableEventDefinitions())
-}
-
 func workflowEventOptionsFromStableEvents(stableEvents []StableEventDefinition) []selectOption {
 	options := stableEventOptionsFromDefinitions(stableEvents)
 	for event, actions := range GitHubWebhookEvents {
