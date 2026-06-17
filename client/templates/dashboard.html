@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.css">
   <!-- Active (default) theme stylesheet. class="theme" is REQUIRED so the runtime can find
        and swap this <link>; data-theme marks the currently active theme. -->
-  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css" class="theme" data-theme="light">
+  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/[[ .Theme ]].min.css" class="theme" data-theme="[[ .Theme ]]">
   <!-- Available themes the toggle swaps between (content=name, data-href=stylesheet URL). -->
   <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
   <meta name="nd-theme" content="dark"  data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/dark.min.css">
@@ -221,5 +221,24 @@
 
   <!-- ndesign CDN JS — must be last in <body>. -->
   <script defer src="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.js"></script>
+  <script>
+    function eventicCurrentTheme() {
+      const link = document.querySelector("link.theme[data-theme]");
+      return link?.dataset.theme === "dark" ? "dark" : "light";
+    }
+
+    function eventicPersistTheme() {
+      fetch("/api/theme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theme: eventicCurrentTheme() })
+      }).catch(() => {});
+    }
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest("[data-nd-theme-toggle]")) return;
+      window.setTimeout(eventicPersistTheme, 0);
+    });
+  </script>
 </body>
 </html>

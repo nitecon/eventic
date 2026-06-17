@@ -46,6 +46,7 @@ content:
         - Left-clicking a repository navigates to `GET /{org}/{repo}`; it does not mutate a dashboard-local selected-repo variable.
         - Use the header `Configuration` link (`GET /global`) for global workflow and event mapping configuration; it is not grouped in the repository sidebar.
         - The top-right header shows the running client version from `client.Version` with `data-eventic-version`.
+        - The active theme is server-rendered from the `eventic_theme` cookie. The theme toggle persists changes with `POST /api/theme` and payload `{theme:"light"|"dark"}`.
     - name: Configure repository workflows
       steps:
         - Open `GET /{org}/{repo}` for a server-rendered configuration page. Unknown repositories return 404.
@@ -96,6 +97,7 @@ content:
         - "`GET /api/projects?summary=1`, or any `org`/`search` query, returns `ProjectSummary` objects: `repo`, `owner`, `name`, `state`, `updated_at`."
         - "`GET /api/projects/{org}/{repo}` returns the latest `ProjectState` for that repository."
         - "`GET /api/workflows`, `POST /api/workflows`, `GET/PUT/DELETE /api/workflows/{id}` remain the raw DAG CRUD API and accept explicit nodes and edges."
+        - "`POST /api/theme` sets an HttpOnly `eventic_theme` cookie for `light` or `dark`; dashboard and configuration templates inject the active stylesheet from that cookie."
         - "`GET /api/event-types` returns stable event keys plus GitHub webhook event/action references and Eventic's synthetic `comms` event."
         - "`GET /api/stable-events` returns stable event registry rows with id, event key, group, title, description, enabled, built_in, example sources, and workflow uses."
         - "`POST /api/stable-events`, `PUT /api/stable-events/{id}`, and `DELETE /api/stable-events/{id}` manage custom stable events. Deleting a custom stable event also removes mappings targeting that key."

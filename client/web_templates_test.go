@@ -291,10 +291,8 @@ func TestDashboardTemplateConformance(t *testing.T) {
 		t.Error("nav anchors must not use data-nd-action=\"GET #\" — use data-nd-set only")
 	}
 
-	// Fix 3: theme uses the spec pattern — ONE active theme <link class="theme">
-	// (the default) that the runtime swaps, PLUS nd-theme metas declaring both.
-	// The active default-theme stylesheet must actually load so the page is
-	// styled before/without JS, not left unstyled until the first toggle.
+	// Fix 3: theme uses the spec pattern: one active theme <link class="theme">
+	// that the runtime swaps, PLUS nd-theme metas declaring both available themes.
 	if !strings.Contains(body, `class="theme" data-theme="light"`) {
 		t.Error("expected an active default theme <link class=\"theme\" data-theme=\"light\"> so a theme stylesheet loads by default")
 	}
@@ -316,6 +314,42 @@ func TestDashboardTemplateConformance(t *testing.T) {
 
 	if strings.Contains(body, `id="project-detail"`) {
 		t.Error("dashboard must not render stale selected-project detail panels")
+	}
+}
+
+func TestDashboardTemplateUsesThemeCookie(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:16384"
+	req.AddCookie(&http.Cookie{Name: themeCookieName, Value: darkTheme})
+	rec := httptest.NewRecorder()
+
+	indexHandler(Config{}, store).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `themes/dark.min.css" class="theme" data-theme="dark"`) {
+		t.Error("expected active dark theme stylesheet from cookie")
+	}
+	if !strings.Contains(body, `eventicPersistTheme`) {
+		t.Error("expected theme persistence script")
+	}
+}
+
+func TestConfigurationTemplateUsesThemeCookie(t *testing.T) {
+	store := seedTemplateStore(t)
+	req := httptest.NewRequest(http.MethodGet, "/global", nil)
+	req.Host = "localhost:16384"
+	req.AddCookie(&http.Cookie{Name: themeCookieName, Value: darkTheme})
+	rec := httptest.NewRecorder()
+
+	configurationHandler(store).ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `themes/dark.min.css" class="theme" data-theme="dark"`) {
+		t.Error("expected active dark theme stylesheet from cookie")
+	}
+	if !strings.Contains(body, `eventicPersistTheme`) {
+		t.Error("expected theme persistence script")
 	}
 }
 
@@ -379,13 +413,17 @@ func TestDashboardTemplateNoForbiddenMarkup(t *testing.T) {
 		t.Error("rendered output must not contain inline style= attributes")
 	}
 
-	// Only one <script> tag (the ndesign loader); no extra script blocks.
+	// The ndesign loader and the small Eventic theme persistence hook are the
+	// only dashboard scripts.
 	scriptCount := strings.Count(body, "<script")
-	if scriptCount > 1 {
-		t.Errorf("expected exactly 1 <script> tag (ndesign loader), got %d", scriptCount)
+	if scriptCount != 2 {
+		t.Errorf("expected exactly 2 script tags, got %d", scriptCount)
 	}
 	if !strings.Contains(body, "ndesign.min.js") {
 		t.Error("expected ndesign.min.js loader script in rendered output")
+	}
+	if !strings.Contains(body, "eventicPersistTheme") {
+		t.Error("expected Eventic theme persistence script in rendered output")
 	}
 }
 

@@ -519,6 +519,7 @@ When `web.enabled` is true the client exposes a JSON/WS API for authoring workfl
 | `POST` | `/api/workflow-config/{id}/steps` | Append a typed step to a configured workflow |
 | `PUT` | `/api/workflow-config/{id}/steps/{node_key}` | Update one typed step |
 | `DELETE` | `/api/workflow-config/{id}/steps/{node_key}` | Delete one typed step |
+| `POST` | `/api/theme` | Persist dashboard theme preference `{theme:"light"|"dark"}` in the `eventic_theme` cookie |
 | `GET` | `/api/event-types` | Reference event list (stable events, GitHub events, and `comms`) for editor dropdowns |
 | `GET` | `/api/stable-events` | Stable event registry with event key, group, title, description, and examples |
 | `POST` | `/api/stable-events` | Create a custom stable event `{event,title,group,description,enabled}` |

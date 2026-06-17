@@ -627,6 +627,38 @@ func TestEventTypesHandlerIncludesComms(t *testing.T) {
 	}
 }
 
+func TestThemeHandlerSetsCookie(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/theme", strings.NewReader(`{"theme":"dark"}`))
+	themeHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected one cookie, got %#v", cookies)
+	}
+	cookie := cookies[0]
+	if cookie.Name != themeCookieName || cookie.Value != darkTheme || cookie.Path != "/" {
+		t.Fatalf("unexpected theme cookie: %#v", cookie)
+	}
+	if !cookie.HttpOnly {
+		t.Fatal("expected theme cookie to be HttpOnly")
+	}
+}
+
+func TestThemeHandlerRejectsInvalidTheme(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/theme", strings.NewReader(`{"theme":"solarized"}`))
+	themeHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if decodeEnvelope(t, rec)["theme"] == "" {
+		t.Fatal("expected theme field error")
+	}
+}
+
 func TestStableEventsAPICreatesCustomEvent(t *testing.T) {
 	store := newTestStore(t)
 	body := `{"event":"catchall","title":"Catch All","group":"Custom","description":"Route any unmatched event","enabled":true}`

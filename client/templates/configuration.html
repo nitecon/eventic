@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Eventic - [[ .Title ]]</title>
   <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/ndesign.min.css">
-  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css" class="theme" data-theme="light">
+  <link rel="stylesheet" href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/[[ .Theme ]].min.css" class="theme" data-theme="[[ .Theme ]]">
   <meta name="nd-theme" content="light" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/light.min.css">
   <meta name="nd-theme" content="dark" data-href="https://storage.googleapis.com/ndesign-cdn/ndesign/latest/themes/dark.min.css">
   <meta name="endpoint:workflow-config" content="/api/workflow-config">
@@ -1030,6 +1030,19 @@
       }
     }
 
+    function eventicCurrentTheme() {
+      const link = document.querySelector("link.theme[data-theme]");
+      return link?.dataset.theme === "dark" ? "dark" : "light";
+    }
+
+    function eventicPersistTheme() {
+      fetch("/api/theme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theme: eventicCurrentTheme() })
+      }).catch(() => {});
+    }
+
     document.addEventListener("submit", async (event) => {
       const form = event.target.closest("form[data-eventic-action]");
       if (!form) return;
@@ -1081,6 +1094,10 @@
     });
 
     document.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-nd-theme-toggle]")) {
+        window.setTimeout(eventicPersistTheme, 0);
+        return;
+      }
       const button = event.target.closest("[data-eventic-delete]");
       if (!button) return;
       try {

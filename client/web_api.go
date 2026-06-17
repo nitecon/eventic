@@ -16,6 +16,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	themeCookieName = "eventic_theme"
+	defaultTheme    = "light"
+	darkTheme       = "dark"
+)
+
 // ── ndesign error envelope ───────────────────────────────────────────────────
 
 // writeAPIError writes the ndesign error envelope `{"errors":{...}}` with the
@@ -41,6 +47,61 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func themePreference(r *http.Request) string {
+	cookie, err := r.Cookie(themeCookieName)
+	if err != nil {
+		return defaultTheme
+	}
+	theme, ok := normalizeTheme(cookie.Value)
+	if !ok {
+		return defaultTheme
+	}
+	return theme
+}
+
+func normalizeTheme(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case defaultTheme:
+		return defaultTheme, true
+	case darkTheme:
+		return darkTheme, true
+	default:
+		return "", false
+	}
+}
+
+type themeRequest struct {
+	Theme string `json:"theme"`
+}
+
+func themeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			globalError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req themeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAPIError(w, http.StatusUnprocessableEntity, map[string]string{"error": "invalid json"})
+			return
+		}
+		theme, ok := normalizeTheme(req.Theme)
+		if !ok {
+			writeAPIError(w, http.StatusUnprocessableEntity, map[string]string{"theme": "must be light or dark"})
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     themeCookieName,
+			Value:    theme,
+			Path:     "/",
+			MaxAge:   60 * 60 * 24 * 365,
+			SameSite: http.SameSiteLaxMode,
+			HttpOnly: true,
+		})
+		writeJSON(w, http.StatusOK, map[string]string{"theme": theme})
+	}
 }
 
 // ── Workflows ────────────────────────────────────────────────────────────────

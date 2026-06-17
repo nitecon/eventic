@@ -313,6 +313,7 @@ func webMux(cfg Config, logStore *ExecutionLog, projectStore *ProjectStore, repl
 	mux.HandleFunc("/api/workflows/", workflowItemHandler(projectStore))
 	mux.HandleFunc("/api/workflow-config", workflowConfigCollectionHandler(projectStore))
 	mux.HandleFunc("/api/workflow-config/", workflowConfigItemHandler(projectStore))
+	mux.HandleFunc("/api/theme", themeHandler())
 	mux.HandleFunc("/api/event-types", eventTypesHandler(projectStore))
 	mux.HandleFunc("/api/stable-events", stableEventsCollectionHandler(projectStore))
 	mux.HandleFunc("/api/stable-events/", stableEventItemHandler(projectStore))
